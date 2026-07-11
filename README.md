@@ -58,12 +58,18 @@ Frequencies are **Hz** (`122.725 MHz` → `122725000`).
 | Toggle | Typical content |
 |--------|------------------|
 | **ATC** | 118–137 MHz AM (off by default) |
-| **Ham** | 2 m, 70 cm, 1.25 m |
+| **Ham** | 10 m, 6 m, 2 m, 1.25 m, **full 70 cm (420–450)**, 33 cm, 23 cm |
 | **GMRS/FRS** | Full US GMRS/FRS table |
 | **MURS** | MURS |
 | **Marine** | Marine VHF |
 
 Toggles and squelch apply live via `squelch.json`.
+
+### Why not the entire 25–1750 MHz continuum?
+
+An RTL-SDR look is only **~2 MHz** wide at 2.048 Msps. Scanning “everything” would mean **hundreds** of hop windows and a very long revisit time. The default plan covers **allocations that usually carry voice/local traffic** inside the stick’s range (including **10 m through 23 cm** ham), not empty ISM/TV dead space. More windows = longer full hop cycle; idle hops stay fast.
+
+**12 m (24.89–24.99 MHz)** is below most R820T sticks — not scanned.
 
 ## Output
 
