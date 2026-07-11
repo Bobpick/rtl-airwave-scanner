@@ -189,6 +189,19 @@ scan:
   survey_fft_size: 2048
   survey_averages: 2
   hop_after_idle_looks: 2
+  # Higher weight = more visits when hopping (voice nets first)
+  hop_weights:
+    ham_2m: 8
+    ham_70cm: 8
+    gmrs: 6
+    murs: 4
+    marine: 4
+    ham_6m: 2
+    ham_10m: 2
+    ham_1p25m: 2
+    ham_33cm: 1
+    ham_23cm: 1
+    atc: 3
 
 logging:
   level: INFO

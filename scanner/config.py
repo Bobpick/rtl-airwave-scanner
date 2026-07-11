@@ -107,6 +107,7 @@ class Config:
     survey_fft_size: int = 2048
     survey_averages: int = 2
     hop_after_idle_looks: int = 2
+    hop_weights: dict = field(default_factory=dict)
     include_all_gmrs_labels: bool = True
     # Live toggles (overridden by squelch.json)
     enable_atc: bool = False
@@ -283,6 +284,7 @@ class Config:
             survey_fft_size=int(scan.get("survey_fft_size", 2048)),
             survey_averages=int(scan.get("survey_averages", 2)),
             hop_after_idle_looks=int(scan.get("hop_after_idle_looks", 2)),
+            hop_weights=dict(scan.get("hop_weights") or {}),
             include_all_gmrs_labels=include_gmrs,
             operator_callsign=str(raw.get("operator_callsign") or ""),
             operator_class=str(raw.get("operator_class") or ""),

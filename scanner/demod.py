@@ -65,8 +65,20 @@ def deemphasis(audio: np.ndarray, sample_rate: float, tau: float) -> np.ndarray:
 
 
 def resample_audio(audio: np.ndarray, in_rate: float, out_rate: int) -> np.ndarray:
+    """Downsample audio; prefer cheap FIR decimate over full FFT resample."""
     if abs(in_rate - out_rate) < 1.0:
         return audio.astype(np.float32)
+    if len(audio) < 8:
+        return audio.astype(np.float32)
+    # Integer decimation when rates allow (common: 48k→16k)
+    if in_rate > out_rate:
+        factor = int(round(in_rate / out_rate))
+        if factor >= 2 and abs(in_rate / factor - out_rate) < 100.0:
+            try:
+                y = signal.decimate(audio, factor, ftype="fir", zero_phase=True)
+                return np.asarray(y, dtype=np.float32)
+            except Exception:
+                pass
     n_out = int(round(len(audio) * out_rate / in_rate))
     if n_out < 1:
         return np.zeros(0, dtype=np.float32)

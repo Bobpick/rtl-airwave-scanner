@@ -14,8 +14,9 @@ import numpy as np
 from scanner.audio_quality import analyze_audio
 from scanner.config import Band, Config
 from scanner.demod import demodulate
+from scanner.lockfile import acquire as acquire_lock
 from scanner.recorder import Transmission, TransmissionLog, utcnow
-from scanner.sdr import RtlSdrSource
+from scanner.sdr import IqBlock, RtlSdrSource
 from scanner.spectrum import find_peaks, power_spectrum_db
 from scanner.live_state import write_live_state
 from scanner.squelch import apply_to_config, group_enabled, load_squelch
@@ -58,6 +59,8 @@ class ScannerApp:
         self._last_squelch_check = 0.0
         self._site_name = "LOCAL"
         self._mode = "SURVEY"
+        self._last_live_write = 0.0
+        self._live_period_s = 0.15  # ~6–7 UI updates/s max
         # Apply live squelch overrides if file already exists
         self._reload_squelch(force=True)
         # Optional site name from overlay
@@ -164,9 +167,9 @@ class ScannerApp:
                 usable / 1e3,
             )
         center = band.center_hz
-        self.sdr.set_center(center)
-        # Minimal settle buffer (keeps hop rate high)
-        self.sdr.read_samples(min(self.cfg.survey_fft_size, 4096))
+        # Match reader block size to survey/dwell before retune
+        self.sdr.set_block_len(self._samples_per_look())
+        self.sdr.set_center(center)  # settle + flush handled in sdr.py
         # Reset spur learning per band hop
         self._look_count = 0
         self._hit_counts.clear()
@@ -175,17 +178,20 @@ class ScannerApp:
         self._learning_done = False
         return center
 
-    def _look(self, band: Band, center: float):
+    def _process_block(self, band: Band, block: IqBlock):
+        """FFT + peak detect on one IQ block (no USB I/O here)."""
         fft_size, _averages = self._fft_params()
-        n = self._samples_per_look()
-        iq = self.sdr.read_samples(n)
-        freqs, power = power_spectrum_db(
-            iq, self.sdr.sample_rate, center, fft_size
-        )
-        guard = self.sdr.sample_rate * self.cfg.edge_guard_fraction
-        lo = max(band.start_hz, center - self.sdr.sample_rate / 2 + guard)
-        hi = min(band.stop_hz, center + self.sdr.sample_rate / 2 - guard)
-        # Slightly lower SNR bar in survey so weak hits trigger a dwell
+        # Ensure we have at least one FFT frame
+        iq = block.iq
+        if len(iq) < fft_size:
+            return [], iq, block.center_hz
+        # Use configured fft size; if block is longer, power_spectrum averages frames
+        center = block.center_hz
+        sr = block.sample_rate
+        freqs, power = power_spectrum_db(iq, sr, center, fft_size)
+        guard = sr * self.cfg.edge_guard_fraction
+        lo = max(band.start_hz, center - sr / 2 + guard)
+        hi = min(band.stop_hz, center + sr / 2 - guard)
         snr = self.cfg.snr_threshold_db
         if self._survey_mode():
             snr = max(8.0, snr - 3.0)
@@ -199,43 +205,47 @@ class ScannerApp:
         )
         peaks = [p for p in peaks if not self._is_ignored(p.frequency_hz)]
 
-        # Feed the dashboard spectrum / waterfall
-        try:
-            self._mode = "DWELL" if any(t.recording for t in self.tracks.values()) else "SURVEY"
+        # Throttled dashboard feed (do not stall DSP with disk every look)
+        now = time.monotonic()
+        if now - self._last_live_write >= self._live_period_s:
+            self._last_live_write = now
             try:
-                g = self.sdr._sdr.gain
-                gain = float(g) if not isinstance(g, str) else 0.0
+                self._mode = (
+                    "DWELL" if any(t.recording for t in self.tracks.values()) else "SURVEY"
+                )
+                plan = [
+                    {
+                        "name": b.name,
+                        "group": b.group,
+                        "start_mhz": b.start_hz / 1e6,
+                        "stop_mhz": b.stop_hz / 1e6,
+                        "active": b.name == band.name,
+                    }
+                    for b in self._active_bands()
+                ]
+                write_live_state(
+                    site_name=self._site_name,
+                    mode=self._mode,
+                    gain=self.sdr.gain_db,
+                    band_name=band.name,
+                    group=band.group,
+                    center_hz=center,
+                    sample_rate=sr,
+                    freqs_hz=freqs,
+                    power_db=power,
+                    peaks=[
+                        {
+                            "mhz": p.frequency_hz / 1e6,
+                            "snr_db": p.snr_db,
+                            "group": band.group,
+                        }
+                        for p in peaks[:12]
+                    ],
+                    plan=plan,
+                    path=self.cfg.output_dir / "live_state.json",
+                )
             except Exception:
-                gain = float(self.cfg.gain or 0)
-            plan = [
-                {
-                    "name": b.name,
-                    "group": b.group,
-                    "start_mhz": b.start_hz / 1e6,
-                    "stop_mhz": b.stop_hz / 1e6,
-                    "active": b.name == band.name,
-                }
-                for b in self._active_bands()
-            ]
-            write_live_state(
-                site_name=self._site_name,
-                mode=self._mode,
-                gain=gain,
-                band_name=band.name,
-                group=band.group,
-                center_hz=center,
-                sample_rate=self.sdr.sample_rate,
-                freqs_hz=freqs,
-                power_db=power,
-                peaks=[
-                    {"mhz": p.frequency_hz / 1e6, "snr_db": p.snr_db, "group": band.group}
-                    for p in peaks[:12]
-                ],
-                plan=plan,
-                path=self.cfg.output_dir / "live_state.json",
-            )
-        except Exception:
-            pass
+                pass
 
         return peaks, iq, center
 
@@ -500,14 +510,33 @@ class ScannerApp:
         out = [b for b in self.cfg.bands if group_enabled(self.cfg, b.group)]
         return out
 
+    def _hop_weight(self, band: Band) -> int:
+        """Visit high-value voice groups more often (config scan.hop_weights)."""
+        weights = getattr(self.cfg, "hop_weights", None) or {}
+        try:
+            w = int(weights.get(band.group, 1))
+        except (TypeError, ValueError):
+            w = 1
+        return max(1, min(w, 20))
+
     def _next_enabled_band(self, current: Band | None) -> Band | None:
         active = self._active_bands()
         if not active:
             return None
+        # Expand list by weight for simple weighted round-robin
+        tickets: list[Band] = []
+        for b in active:
+            tickets.extend([b] * self._hop_weight(b))
+        if not tickets:
+            return None
         if current is None or current not in active:
-            return active[0]
-        i = active.index(current)
-        return active[(i + 1) % len(active)]
+            return tickets[0]
+        # Advance to next ticket after last occurrence of current
+        try:
+            idx = len(tickets) - 1 - tickets[::-1].index(current)
+        except ValueError:
+            return tickets[0]
+        return tickets[(idx + 1) % len(tickets)]
 
     def run(self) -> int:
         self._reload_squelch(force=True)
@@ -516,6 +545,10 @@ class ScannerApp:
             log.error("No bands enabled — turn on ATC/ham/GMRS/… in the viewer")
             self.sdr.close()
             return 1
+
+        # Background USB reader — DSP must never block sample ingest
+        self.sdr.set_block_len(self._samples_per_look())
+        self.sdr.start(self._samples_per_look())
         center = self._tune_band(band)
         log.info(
             "Monitoring band %s [%s]: %.3f–%.3f MHz (%s)",
@@ -529,12 +562,12 @@ class ScannerApp:
         n_gmrs = sum(1 for ch in self.cfg.known_channels if "GMRS" in ch.name or "FRS" in ch.name)
         log.info("Channel labels: %d total (%d GMRS/FRS)", n_labels, n_gmrs)
         log.info(
-            "Fast survey: FFT=%d×%d, hop after %d idle looks · dwell FFT=%d×%d when recording",
+            "IQ pipeline: async reader · survey FFT=%d×%d · dwell FFT=%d×%d · hop_idle=%d",
             self.cfg.survey_fft_size,
             self.cfg.survey_averages,
-            self.cfg.hop_after_idle_looks,
             self.cfg.fft_size,
             self.cfg.averages,
+            self.cfg.hop_after_idle_looks,
         )
         log.info(
             "Spur learning %.0fs/band then record. Quality filter=%s",
@@ -545,7 +578,6 @@ class ScannerApp:
 
         looks_without_activity = 0
         hop_after = max(1, self.cfg.hop_after_idle_looks)
-        # Don't pin forever on one window (noise/spurs used to block hops while tracks existed)
         max_band_dwell_s = float(getattr(self.cfg, "max_band_dwell_seconds", 25.0))
         looks_total = 0
         rate_t0 = time.monotonic()
@@ -557,20 +589,35 @@ class ScannerApp:
             while not self._stop:
                 self._reload_squelch()
                 hop_after = max(1, self.cfg.hop_after_idle_looks)
+                # Keep reader block size aligned with survey/dwell mode
+                self.sdr.set_block_len(self._samples_per_look())
+
+                block = self.sdr.get_block(timeout=1.0)
+                if block is None:
+                    continue
+                if block.dropped_before:
+                    log.warning(
+                        "IQ overrun: dropped %d block(s) (DSP behind USB)",
+                        block.dropped_before,
+                    )
+                # Ignore blocks from previous center if any slipped through
+                if abs(block.center_hz - center) > 1.0:
+                    continue
+
                 now = time.monotonic()
-                peaks, iq, center = self._look(band, center)
+                peaks, iq, center = self._process_block(band, block)
                 self._update_spur_learning(peaks)
                 looks_total += 1
 
-                # Channel-equivalent rate: one wideband look covers ~sr/step channels
-                if looks_total == 1 or (time.monotonic() - rate_t0) >= 5.0:
+                if (time.monotonic() - rate_t0) >= 5.0:
                     elapsed = max(time.monotonic() - rate_t0, 1e-6)
                     ch_per_look = max(self.cfg.sample_rate_hz / max(self.cfg.channel_step_hz, 1), 1)
                     rate = (looks_total * ch_per_look) / elapsed
                     active_n = len(self._active_bands())
                     log.info(
-                        "Scan rate ≈ %.0f ch-checks/s · window %s · plan %d bands",
+                        "Scan rate ≈ %.0f ch-checks/s · %.1f looks/s · window %s · plan %d",
                         rate,
+                        looks_total / elapsed,
                         band.name,
                         active_n,
                     )
@@ -694,6 +741,9 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    # Prevent two scanners fighting one dongle
+    acquire_lock(Path(cfg.output_dir).parent / "logs" / "scanner.lock")
 
     app = ScannerApp(cfg)
     signal.signal(signal.SIGINT, app.request_stop)
