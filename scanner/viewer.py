@@ -430,20 +430,6 @@ PAGE = r"""
       color: #fff;
       border-color: #ff90a0;
     }
-    .shutdown-side {
-      width: 100%;
-      margin-top: 1.1rem;
-      padding: .55rem .75rem;
-      border-radius: 8px;
-      border: 1px solid #e07080;
-      background: #b83a48;
-      color: #fff;
-      font-size: .85rem;
-      font-weight: 700;
-      cursor: pointer;
-      letter-spacing: .03em;
-    }
-    .shutdown-side:hover { background: #d04555; }
     .ham-sub {
       margin: .25rem 0 .55rem .85rem;
       padding-left: .65rem;
@@ -500,7 +486,6 @@ PAGE = r"""
             <label><input type="checkbox" id="enable_murs" checked/> MURS <span class="muted">(151–155)</span></label>
           </div>
           <div class="saved" id="bg-saved">saved</div>
-          <button type="button" class="shutdown-side" id="shutdown-side">Shutdown scanner</button>
 
           <h3 style="margin-top:1.25rem;">RECORDING THRESHOLDS</h3>
           <p style="margin:0 0 .65rem;font-size:.72rem;color:var(--muted);line-height:1.35;">
@@ -986,7 +971,6 @@ PAGE = r"""
         '</div>';
     }
     $('shutdown').onclick = doShutdown;
-    if ($('shutdown-side')) $('shutdown-side').onclick = doShutdown;
 
     // Operator callsign (from site.yaml via /api/status)
     fetch('/api/status').then(r => r.json()).then(s => {
