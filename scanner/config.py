@@ -100,6 +100,10 @@ class Config:
     output_dir: Path = Path("recordings")
     database: Path = Path("recordings/transmissions.db")
     csv_path: Path = Path("recordings/transmissions.csv")
+    # Audio lifecycle: zip loose WAVs, then purge archives
+    audio_zip_after_hours: float = 12.0
+    audio_delete_after_hours: float = 72.0
+    retention_interval_seconds: float = 900.0  # how often scanner runs retention
     log_level: str = "INFO"
     viewer_host: str = "127.0.0.1"
     viewer_port: int = 8765
@@ -277,6 +281,9 @@ class Config:
             output_dir=Path(output.get("directory", "recordings")),
             database=Path(output.get("database", "recordings/transmissions.db")),
             csv_path=Path(output.get("csv", "recordings/transmissions.csv")),
+            audio_zip_after_hours=float(output.get("zip_after_hours", 12)),
+            audio_delete_after_hours=float(output.get("delete_after_hours", 72)),
+            retention_interval_seconds=float(output.get("retention_interval_seconds", 900)),
             log_level=str(logging_cfg.get("level", "INFO")).upper(),
             viewer_host=str(viewer.get("host", "127.0.0.1")),
             viewer_port=int(viewer.get("port", 8765)),

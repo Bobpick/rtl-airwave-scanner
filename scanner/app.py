@@ -19,6 +19,7 @@ from scanner.recorder import Transmission, TransmissionLog, utcnow
 from scanner.sdr import IqBlock, RtlSdrSource
 from scanner.spectrum import find_peaks, power_spectrum_db
 from scanner.live_state import write_live_state
+from scanner.retention import run_retention
 from scanner.squelch import apply_to_config, group_enabled, load_squelch
 
 log = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ class ScannerApp:
         self._mode = "SURVEY"
         self._last_live_write = 0.0
         self._live_period_s = 0.15  # ~6–7 UI updates/s max
+        self._last_retention = 0.0
         # Apply live squelch overrides if file already exists
         self._reload_squelch(force=True)
         # Optional site name from overlay
@@ -82,6 +84,23 @@ class ScannerApp:
     def request_stop(self, *_args) -> None:
         log.info("Stop requested…")
         self._stop = True
+
+    def _maybe_run_retention(self, force: bool = False) -> None:
+        """Zip WAVs past zip_after_hours; delete archives past delete_after_hours."""
+        interval = float(getattr(self.cfg, "retention_interval_seconds", 900.0) or 900.0)
+        now = time.monotonic()
+        if not force and (now - self._last_retention) < interval:
+            return
+        self._last_retention = now
+        try:
+            run_retention(
+                self.cfg.output_dir,
+                zip_after_hours=float(getattr(self.cfg, "audio_zip_after_hours", 12.0)),
+                delete_after_hours=float(getattr(self.cfg, "audio_delete_after_hours", 72.0)),
+                db_path=self.cfg.database,
+            )
+        except Exception as e:
+            log.warning("Retention pass failed: %s", e)
 
     def _reload_squelch(self, force: bool = False) -> None:
         """Hot-reload squelch.json from the web UI (throttled)."""
@@ -637,6 +656,13 @@ class ScannerApp:
             self.cfg.require_audio_quality,
         )
         log.info("Logging to %s and %s", self.cfg.database, self.cfg.csv_path)
+        log.info(
+            "Audio retention: zip after %.0fh · delete after %.0fh (every %.0fs)",
+            float(getattr(self.cfg, "audio_zip_after_hours", 12.0)),
+            float(getattr(self.cfg, "audio_delete_after_hours", 72.0)),
+            float(getattr(self.cfg, "retention_interval_seconds", 900.0)),
+        )
+        self._maybe_run_retention(force=True)
 
         looks_without_activity = 0
         hop_after = max(1, self.cfg.hop_after_idle_looks)
@@ -650,6 +676,7 @@ class ScannerApp:
         try:
             while not self._stop:
                 self._reload_squelch()
+                self._maybe_run_retention()
                 hop_after = max(1, self.cfg.hop_after_idle_looks)
                 # Keep reader block size aligned with survey/dwell mode
                 self.sdr.set_block_len(self._samples_per_look())

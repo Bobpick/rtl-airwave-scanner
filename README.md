@@ -75,9 +75,16 @@ An RTL-SDR look is only **~2 MHz** wide at 2.048 Msps. Scanning “everything”
 
 | Path | Content |
 |------|---------|
-| `recordings/*.wav` | Audio |
+| `recordings/*.wav` | Recent audio (kept loose for ~12 hours) |
+| `recordings/archive/*.wav.zip` | Zipped audio (12–72 hours old) |
 | `recordings/transmissions.db` | SQLite log |
 | `recordings/transmissions.csv` | CSV log |
+
+**Retention (default):** after **12 hours** each WAV is zipped under `recordings/archive/`; after **72 hours** the archive is deleted. DB metadata stays. Override in `config.yaml` → `output.zip_after_hours` / `delete_after_hours`. Manual pass:
+
+```bash
+.venv/bin/python -m scanner.retention -c config.yaml
+```
 
 ## License
 

@@ -176,6 +176,10 @@ output:
   directory: recordings
   database: recordings/transmissions.db
   csv: recordings/transmissions.csv
+  # Zip WAVs older than 12h into recordings/archive/; delete archives after 72h
+  zip_after_hours: 12
+  delete_after_hours: 72
+  retention_interval_seconds: 900
 
 viewer:
   host: 127.0.0.1

@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, abort, jsonify, render_template_string, request, send_file
+from flask import Flask, Response, abort, jsonify, render_template_string, request, send_file
 
 from scanner.config import Config
 from scanner.live_state import read_live_state
@@ -1170,20 +1170,45 @@ def create_app(cfg: Config) -> Flask:
 
     @app.get("/audio/<int:tx_id>")
     def audio(tx_id: int):
+        from scanner.retention import open_audio_bytes
+
         row = log.get(tx_id)
         if not row or not row.get("audio_file"):
             abort(404)
         raw = Path(row["audio_file"])
-        candidates = []
+        candidates: list[Path] = []
         if raw.is_absolute():
             candidates.append(raw)
         else:
             candidates.append((root / raw).resolve())
             candidates.append((Path.cwd() / raw).resolve())
             candidates.append(raw.resolve())
+        # Also try archive/<name>.wav.zip if loose WAV was archived
+        extra: list[Path] = []
+        for c in list(candidates):
+            if c.suffix.lower() == ".wav":
+                extra.append(c.parent / "archive" / f"{c.name}.zip")
+                extra.append(cfg.output_dir / "archive" / f"{c.name}.zip")
+            if str(c).endswith(".wav.zip") and not c.is_file():
+                # bare path under recordings/
+                extra.append(cfg.output_dir / "archive" / c.name)
+        candidates.extend(extra)
         path = next((p for p in candidates if p.is_file()), None)
         if path is None:
             abort(404)
+        if path.suffix.lower() == ".zip" or path.name.endswith(".wav.zip"):
+            opened = open_audio_bytes(path)
+            if opened is None:
+                abort(404)
+            data, dl_name = opened
+            return Response(
+                data,
+                mimetype="audio/wav",
+                headers={
+                    "Content-Disposition": f'inline; filename="{dl_name}"',
+                    "Cache-Control": "no-cache",
+                },
+            )
         return send_file(
             path,
             mimetype="audio/wav",
