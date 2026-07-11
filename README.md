@@ -8,6 +8,8 @@ Python RTL-SDR scanner for **SIGINT-style** capture:
 - Records **UTC time, frequency, SNR, audio WAV**
 - Web viewer with **squelch sliders** and **band group toggles** (ATC / ham / GMRS / …)
 - Site-specific ATC, AWOS ignores, and local repeaters live in **`site.yaml`** (not committed)
+- **Multi-dongle + multi-threading** — one process can drive several RTL-SDRs in parallel (each stick has its own hop worker and USB IQ reader thread)
+- Audio **retention** — zip WAVs after 12 h, delete archives after 72 h
 
 ## Requirements
 
