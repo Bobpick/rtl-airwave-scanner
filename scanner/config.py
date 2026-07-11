@@ -71,6 +71,8 @@ class Config:
     gain: float = 0.0
     ppm_error: int = 0
     serial: str | None = None
+    # Multi-dongle plan (empty → single radio from serial/gain above)
+    radios: list = field(default_factory=list)
     fft_size: int = 4096
     averages: int = 8
     snr_threshold_db: float = 18.0
@@ -247,11 +249,18 @@ class Config:
 
         ignored = [float(x) for x in detection.get("ignored_frequencies_hz", [])]
 
+        from scanner.multi import apply_default_group_split, parse_radios
+
+        gain = float(device.get("gain", 0))
+        ppm = int(device.get("ppm_error", 0))
+        radios = apply_default_group_split(parse_radios(device, gain, ppm))
+
         cfg = cls(
             sample_rate_hz=int(device.get("sample_rate_hz", 2_048_000)),
-            gain=float(device.get("gain", 0)),
-            ppm_error=int(device.get("ppm_error", 0)),
+            gain=gain,
+            ppm_error=ppm,
             serial=device.get("serial"),
+            radios=radios,
             fft_size=int(detection.get("fft_size", 4096)),
             averages=int(detection.get("averages", 8)),
             snr_threshold_db=float(detection.get("snr_threshold_db", 18.0)),

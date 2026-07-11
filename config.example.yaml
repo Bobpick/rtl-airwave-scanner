@@ -20,6 +20,16 @@ device:
   sample_rate_hz: 2048000
   gain: 40.2
   ppm_error: 0
+  # Multi-dongle (#5): uncomment when you have 2+ sticks.
+  # List serials with:  .venv/bin/python -m scanner --list-devices
+  # radios:
+  #   - label: voice
+  #     serial: null              # auto-assign first free dongle
+  #     groups: [ham_2m, ham_70cm, gmrs, murs, marine, ham_1p25m]
+  #   - label: atc
+  #     serial: "00000002"        # second stick serial from --list-devices
+  #     groups: [atc, ham_10m, ham_6m, ham_33cm, ham_23cm]
+  # If radios: has 2+ entries with no groups, a default VHF-voice / ATC+wide split is applied.
 
 detection:
   fft_size: 8192

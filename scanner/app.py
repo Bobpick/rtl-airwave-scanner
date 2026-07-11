@@ -4,6 +4,7 @@ import argparse
 import logging
 import signal
 import sys
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -15,11 +16,12 @@ from scanner.audio_quality import analyze_audio
 from scanner.config import Band, Config
 from scanner.demod import ChannelDemod, normalize_audio
 from scanner.lockfile import acquire as acquire_lock
+from scanner.live_state import LiveHub, write_live_state
+from scanner.multi import RadioConfig, partition_bands, resolve_devices
 from scanner.recorder import Transmission, TransmissionLog, utcnow
-from scanner.sdr import IqBlock, RtlSdrSource
-from scanner.spectrum import find_peaks, power_spectrum_db
-from scanner.live_state import write_live_state
 from scanner.retention import run_retention
+from scanner.sdr import IqBlock, RtlSdrSource, list_rtlsdr_devices
+from scanner.spectrum import find_peaks, power_spectrum_db
 from scanner.squelch import apply_to_config, group_enabled, load_squelch
 
 log = logging.getLogger(__name__)
@@ -40,16 +42,50 @@ class ActiveTrack:
 
 
 class ScannerApp:
-    def __init__(self, cfg: Config) -> None:
+    """
+    One radio worker: owns an RtlSdrSource and hops its assigned band pool.
+
+    Multi-dongle: run several ScannerApp instances (threads) sharing logger + LiveHub.
+    """
+
+    def __init__(
+        self,
+        cfg: Config,
+        *,
+        radio: RadioConfig | None = None,
+        band_pool: list[Band] | None = None,
+        logger: TransmissionLog | None = None,
+        live_hub: LiveHub | None = None,
+        stop_event: threading.Event | None = None,
+        run_retention_loop: bool = True,
+        open_sdr: bool = True,
+    ) -> None:
         self.cfg = cfg
-        self._stop = False
-        self.logger = TransmissionLog(cfg.database, cfg.csv_path, cfg.output_dir)
-        self.sdr = RtlSdrSource(
-            sample_rate_hz=cfg.sample_rate_hz,
+        self._stop_event = stop_event if stop_event is not None else threading.Event()
+        self.logger = logger or TransmissionLog(cfg.database, cfg.csv_path, cfg.output_dir)
+        self.live_hub = live_hub
+        self._run_retention_loop = run_retention_loop
+        self.radio = radio or RadioConfig(
+            label="R0",
+            serial=cfg.serial,
             gain=cfg.gain,
             ppm_error=cfg.ppm_error,
-            serial=cfg.serial,
         )
+        self.radio_label = self.radio.label
+        self.band_pool = list(band_pool) if band_pool is not None else list(cfg.bands)
+
+        gain = float(self.radio.gain if self.radio.gain is not None else cfg.gain)
+        ppm = int(self.radio.ppm_error if self.radio.ppm_error is not None else cfg.ppm_error)
+        self.sdr: RtlSdrSource | None = None
+        if open_sdr:
+            self.sdr = RtlSdrSource(
+                sample_rate_hz=cfg.sample_rate_hz,
+                gain=gain,
+                ppm_error=ppm,
+                serial=self.radio.serial,
+                device_index=self.radio.device_index,
+                label=self.radio_label,
+            )
         self.tracks: dict[int, ActiveTrack] = {}
         self.band_index = 0
         # Spur learning: key -> active look count / total looks this band session
@@ -80,13 +116,21 @@ class ScannerApp:
                     self._site_name = str(site["site_name"])[:32]
         except Exception:
             pass
+        if self.live_hub is not None:
+            self.live_hub.site_name = self._site_name
 
     def request_stop(self, *_args) -> None:
-        log.info("Stop requested…")
-        self._stop = True
+        log.info("[%s] Stop requested…", self.radio_label)
+        self._stop_event.set()
+
+    @property
+    def _stop(self) -> bool:
+        return self._stop_event.is_set()
 
     def _maybe_run_retention(self, force: bool = False) -> None:
         """Zip WAVs past zip_after_hours; delete archives past delete_after_hours."""
+        if not self._run_retention_loop:
+            return
         interval = float(getattr(self.cfg, "retention_interval_seconds", 900.0) or 900.0)
         now = time.monotonic()
         if not force and (now - self._last_retention) < interval:
@@ -177,12 +221,14 @@ class ScannerApp:
         return float(band.channel_bw_hz or self.cfg.channel_bw_hz)
 
     def _tune_band(self, band: Band) -> float:
+        assert self.sdr is not None
         sr = self.cfg.sample_rate_hz
         usable = sr * 0.9
         if band.width_hz > usable:
             log.warning(
-                "Band %s width %.1f kHz exceeds ~%.1f kHz usable span; "
+                "[%s] Band %s width %.1f kHz exceeds ~%.1f kHz usable span; "
                 "only center portion will be monitored",
+                self.radio_label,
                 band.name,
                 band.width_hz / 1e3,
                 usable / 1e3,
@@ -201,6 +247,7 @@ class ScannerApp:
 
     def _process_block(self, band: Band, block: IqBlock):
         """FFT + peak detect on one IQ block (no USB I/O here)."""
+        assert self.sdr is not None
         fft_size, _averages = self._fft_params()
         # Ensure we have at least one FFT frame
         iq = block.iq
@@ -241,30 +288,50 @@ class ScannerApp:
                         "start_mhz": b.start_hz / 1e6,
                         "stop_mhz": b.stop_hz / 1e6,
                         "active": b.name == band.name,
+                        "radio": self.radio_label,
                     }
                     for b in self._active_bands()
                 ]
-                write_live_state(
-                    site_name=self._site_name,
-                    mode=self._mode,
-                    gain=self.sdr.gain_db,
-                    band_name=band.name,
-                    group=band.group,
-                    center_hz=center,
-                    sample_rate=sr,
-                    freqs_hz=freqs,
-                    power_db=power,
-                    peaks=[
-                        {
-                            "mhz": p.frequency_hz / 1e6,
-                            "snr_db": p.snr_db,
-                            "group": band.group,
-                        }
-                        for p in peaks[:12]
-                    ],
-                    plan=plan,
-                    path=self.cfg.output_dir / "live_state.json",
-                )
+                peak_dicts = [
+                    {
+                        "mhz": p.frequency_hz / 1e6,
+                        "snr_db": p.snr_db,
+                        "group": band.group,
+                        "radio": self.radio_label,
+                    }
+                    for p in peaks[:12]
+                ]
+                if self.live_hub is not None:
+                    self.live_hub.publish(
+                        radio=self.radio_label,
+                        mode=self._mode,
+                        gain=self.sdr.gain_db,
+                        band_name=band.name,
+                        group=band.group,
+                        center_hz=center,
+                        sample_rate=sr,
+                        freqs_hz=freqs,
+                        power_db=power,
+                        peaks=peak_dicts,
+                        plan=plan,
+                        serial=str(self.radio.serial or ""),
+                    )
+                else:
+                    write_live_state(
+                        site_name=self._site_name,
+                        mode=self._mode,
+                        gain=self.sdr.gain_db,
+                        band_name=band.name,
+                        group=band.group,
+                        center_hz=center,
+                        sample_rate=sr,
+                        freqs_hz=freqs,
+                        power_db=power,
+                        peaks=peak_dicts,
+                        plan=plan,
+                        radio=self.radio_label,
+                        path=self.cfg.output_dir / "live_state.json",
+                    )
             except Exception:
                 pass
 
@@ -392,7 +459,8 @@ class ScannerApp:
                 label = f"  [{ch.name}]" if ch else ""
                 mean_r = float(np.mean(track.snr_samples[-5:]))
                 log.info(
-                    "START  %.4f MHz  band=%s  snr=%.1f (mean5=%.1f) dB%s",
+                    "[%s] START  %.4f MHz  band=%s  snr=%.1f (mean5=%.1f) dB%s",
+                    self.radio_label,
                     track.frequency_hz / 1e6,
                     band.name,
                     track.peak_snr_db,
@@ -403,6 +471,7 @@ class ScannerApp:
             if track.recording:
                 dem = self._ensure_demod(track, band)
                 # Raw audio — normalize once at finalize
+                assert self.sdr is not None
                 audio = dem.process(iq, center, self.sdr.sample_rate)
                 if len(audio):
                     track.audio_chunks.append(audio)
@@ -553,6 +622,8 @@ class ScannerApp:
             note = f"{ch.name} — {ch.notes}" if ch.notes else ch.name
         else:
             note = ""
+        radio_tag = f"radio={self.radio_label}"
+        note = f"{note} · {radio_tag}" if note else radio_tag
 
         # Skip clutter: do not log pure static unless debugging
         if quality == "rejected" and not self.cfg.log_rejected and not self.cfg.keep_rejected_audio:
@@ -587,9 +658,9 @@ class ScannerApp:
                 self.tracks.pop(key, None)
 
     def _active_bands(self) -> list[Band]:
-        """Bands whose group is currently enabled in the UI."""
-        out = [b for b in self.cfg.bands if group_enabled(self.cfg, b.group)]
-        return out
+        """Bands in this radio's pool whose group is currently enabled in the UI."""
+        pool = self.band_pool if self.band_pool is not None else self.cfg.bands
+        return [b for b in pool if group_enabled(self.cfg, b.group)]
 
     def _hop_weight(self, band: Band) -> int:
         """Visit high-value voice groups more often (config scan.hop_weights)."""
@@ -620,10 +691,15 @@ class ScannerApp:
         return tickets[(idx + 1) % len(tickets)]
 
     def run(self) -> int:
+        assert self.sdr is not None
         self._reload_squelch(force=True)
         band = self._next_enabled_band(None)
         if band is None:
-            log.error("No bands enabled — turn on ATC/ham/GMRS/… in the viewer")
+            log.error(
+                "[%s] No bands enabled for this radio — turn on groups in the viewer "
+                "or check device.radios groups assignment",
+                self.radio_label,
+            )
             self.sdr.close()
             return 1
 
@@ -632,18 +708,21 @@ class ScannerApp:
         self.sdr.start(self._samples_per_look())
         center = self._tune_band(band)
         log.info(
-            "Monitoring band %s [%s]: %.3f–%.3f MHz (%s)",
+            "[%s] Monitoring band %s [%s]: %.3f–%.3f MHz (%s) · pool %d windows",
+            self.radio_label,
             band.name,
             band.group,
             band.start_hz / 1e6,
             band.stop_hz / 1e6,
             band.modulation,
+            len(self.band_pool),
         )
         n_labels = len(self.cfg.known_channels)
         n_gmrs = sum(1 for ch in self.cfg.known_channels if "GMRS" in ch.name or "FRS" in ch.name)
-        log.info("Channel labels: %d total (%d GMRS/FRS)", n_labels, n_gmrs)
+        log.info("[%s] Channel labels: %d total (%d GMRS/FRS)", self.radio_label, n_labels, n_gmrs)
         log.info(
-            "IQ pipeline: async reader · survey FFT=%d×%d · dwell FFT=%d×%d · hop_idle=%d",
+            "[%s] IQ pipeline: async reader · survey FFT=%d×%d · dwell FFT=%d×%d · hop_idle=%d",
+            self.radio_label,
             self.cfg.survey_fft_size,
             self.cfg.survey_averages,
             self.cfg.fft_size,
@@ -651,18 +730,20 @@ class ScannerApp:
             self.cfg.hop_after_idle_looks,
         )
         log.info(
-            "Spur learning %.0fs/band then record. Quality filter=%s",
+            "[%s] Spur learning %.0fs/band then record. Quality filter=%s",
+            self.radio_label,
             self.cfg.spur_learn_seconds,
             self.cfg.require_audio_quality,
         )
-        log.info("Logging to %s and %s", self.cfg.database, self.cfg.csv_path)
-        log.info(
-            "Audio retention: zip after %.0fh · delete after %.0fh (every %.0fs)",
-            float(getattr(self.cfg, "audio_zip_after_hours", 12.0)),
-            float(getattr(self.cfg, "audio_delete_after_hours", 72.0)),
-            float(getattr(self.cfg, "retention_interval_seconds", 900.0)),
-        )
-        self._maybe_run_retention(force=True)
+        if self._run_retention_loop:
+            log.info("Logging to %s and %s", self.cfg.database, self.cfg.csv_path)
+            log.info(
+                "Audio retention: zip after %.0fh · delete after %.0fh (every %.0fs)",
+                float(getattr(self.cfg, "audio_zip_after_hours", 12.0)),
+                float(getattr(self.cfg, "audio_delete_after_hours", 72.0)),
+                float(getattr(self.cfg, "retention_interval_seconds", 900.0)),
+            )
+            self._maybe_run_retention(force=True)
 
         looks_without_activity = 0
         hop_after = max(1, self.cfg.hop_after_idle_looks)
@@ -686,7 +767,8 @@ class ScannerApp:
                     continue
                 if block.dropped_before:
                     log.warning(
-                        "IQ overrun: dropped %d block(s) (DSP behind USB)",
+                        "[%s] IQ overrun: dropped %d block(s) (DSP behind USB)",
+                        self.radio_label,
                         block.dropped_before,
                     )
                 # Ignore blocks from previous center if any slipped through
@@ -704,7 +786,8 @@ class ScannerApp:
                     rate = (looks_total * ch_per_look) / elapsed
                     active_n = len(self._active_bands())
                     log.info(
-                        "Scan rate ≈ %.0f ch-checks/s · %.1f looks/s · window %s · plan %d",
+                        "[%s] Scan rate ≈ %.0f ch-checks/s · %.1f looks/s · window %s · plan %d",
+                        self.radio_label,
                         rate,
                         looks_total / elapsed,
                         band.name,
@@ -716,7 +799,8 @@ class ScannerApp:
                 if peaks:
                     looks_without_activity = 0
                     log.debug(
-                        "Peaks: %s",
+                        "[%s] Peaks: %s",
+                        self.radio_label,
                         ", ".join(
                             f"{p.frequency_hz/1e6:.4f}MHz/{p.snr_db:.0f}dB" for p in peaks
                         ),
@@ -730,7 +814,7 @@ class ScannerApp:
                 recording = any(t.recording for t in self.tracks.values())
                 active = self._active_bands()
                 if not active:
-                    log.warning("All band groups disabled — waiting…")
+                    log.warning("[%s] All band groups disabled — waiting…", self.radio_label)
                     time.sleep(1.0)
                     continue
 
@@ -753,7 +837,8 @@ class ScannerApp:
                 if force_time or group_off or idle_hop or stuck_tracks:
                     if recording and force_time:
                         log.info(
-                            "Max dwell %.0fs on %s — finishing clips and hopping",
+                            "[%s] Max dwell %.0fs on %s — finishing clips and hopping",
+                            self.radio_label,
                             max_band_dwell_s,
                             band.name,
                         )
@@ -777,13 +862,15 @@ class ScannerApp:
                     if active and band == active[0] and prev in active:
                         cycle_s = time.monotonic() - cycle_t0
                         log.info(
-                            "Full enabled-band cycle in %.2fs (%d windows)",
+                            "[%s] Full enabled-band cycle in %.2fs (%d windows)",
+                            self.radio_label,
                             cycle_s,
                             len(active),
                         )
                         cycle_t0 = time.monotonic()
                     log.info(
-                        "Hop → %s [%s] (%.3f–%.3f MHz) %s  (%s)",
+                        "[%s] Hop → %s [%s] (%.3f–%.3f MHz) %s  (%s)",
+                        self.radio_label,
                         band.name,
                         band.group,
                         band.start_hz / 1e6,
@@ -792,17 +879,76 @@ class ScannerApp:
                         reason,
                     )
         except KeyboardInterrupt:
-            log.info("Interrupted")
+            log.info("[%s] Interrupted", self.radio_label)
         finally:
             self._flush_all(band)
             self.sdr.close()
-            log.info("Shutdown complete")
+            log.info("[%s] Shutdown complete", self.radio_label)
         return 0
+
+
+def _run_multi(cfg: Config) -> int:
+    """Start one worker thread per configured radio (shared log + live hub)."""
+    radios = resolve_devices(list(cfg.radios))
+    assignment = partition_bands(cfg.bands, radios)
+    stop_event = threading.Event()
+    shared_log = TransmissionLog(cfg.database, cfg.csv_path, cfg.output_dir)
+    live_hub = LiveHub(cfg.output_dir / "live_state.json")
+
+    workers: list[tuple[ScannerApp, threading.Thread]] = []
+    for i, radio in enumerate(radios):
+        pool = assignment.get(radio.label) or []
+        if not pool:
+            log.warning("[%s] no band windows assigned — skipping", radio.label)
+            continue
+        app = ScannerApp(
+            cfg,
+            radio=radio,
+            band_pool=pool,
+            logger=shared_log,
+            live_hub=live_hub,
+            stop_event=stop_event,
+            run_retention_loop=(i == 0),
+            open_sdr=True,
+        )
+        th = threading.Thread(
+            target=app.run,
+            name=f"radio-{radio.label}",
+            daemon=True,
+        )
+        workers.append((app, th))
+
+    if not workers:
+        log.error("No radio workers started")
+        return 1
+
+    def _stop(*_a) -> None:
+        log.info("Stop requested — shutting down %d radio(s)…", len(workers))
+        stop_event.set()
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+
+    log.info("Multi-dongle: starting %d radio worker(s)", len(workers))
+    for _app, th in workers:
+        th.start()
+
+    # Keep main thread alive; first worker owns retention
+    while not stop_event.is_set():
+        alive = any(th.is_alive() for _a, th in workers)
+        if not alive:
+            break
+        time.sleep(0.4)
+
+    stop_event.set()
+    for _app, th in workers:
+        th.join(timeout=5.0)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Scan RF bands with an RTL-SDR, log transmissions, record audio."
+        description="Scan RF bands with one or more RTL-SDRs, log transmissions, record audio."
     )
     parser.add_argument(
         "-c",
@@ -816,7 +962,39 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Debug logging",
     )
+    parser.add_argument(
+        "--list-devices",
+        action="store_true",
+        help="List connected RTL-SDR serials/indexes and exit",
+    )
     args = parser.parse_args(argv)
+
+    if args.list_devices:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        try:
+            devices = list_rtlsdr_devices()
+        except SystemExit as e:
+            print(e, file=sys.stderr)
+            return 2
+        if not devices:
+            print("No RTL-SDR devices found.")
+            return 1
+        print(f"Found {len(devices)} RTL-SDR device(s):")
+        for d in devices:
+            print(f"  {d.display()}")
+        print("\nPut serials under device.radios in config.yaml, e.g.:")
+        print("  device:")
+        print("    radios:")
+        for i, d in enumerate(devices):
+            label = "voice" if i == 0 else ("atc" if i == 1 else f"r{i}")
+            ser = d.serial or "null"
+            print(f"      - label: {label}")
+            print(f"        serial: \"{ser}\"" if d.serial else f"        device_index: {d.index}")
+        return 0
 
     cfg_path = Path(args.config)
     if not cfg_path.is_file():
@@ -831,10 +1009,23 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
 
-    # Prevent two scanners fighting one dongle
+    # Prevent two scanner processes fighting dongles
     acquire_lock(Path(cfg.output_dir).parent / "logs" / "scanner.lock")
 
-    app = ScannerApp(cfg)
+    n_radios = len(cfg.radios) if cfg.radios else 1
+    if n_radios > 1:
+        return _run_multi(cfg)
+
+    # Single-dongle path (same process, one worker)
+    radio = cfg.radios[0] if cfg.radios else RadioConfig(
+        label="R0", serial=cfg.serial, gain=cfg.gain, ppm_error=cfg.ppm_error
+    )
+    try:
+        radio = resolve_devices([radio])[0]
+    except RuntimeError as e:
+        log.error("%s", e)
+        return 1
+    app = ScannerApp(cfg, radio=radio, band_pool=list(cfg.bands))
     signal.signal(signal.SIGINT, app.request_stop)
     signal.signal(signal.SIGTERM, app.request_stop)
     return app.run()

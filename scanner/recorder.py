@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import logging
 import sqlite3
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,7 @@ class TransmissionLog:
         self.audio_dir.mkdir(parents=True, exist_ok=True)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.csv_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()  # multi-dongle workers share one log
         self._init_db()
         self._init_csv()
 
@@ -137,7 +139,8 @@ class TransmissionLog:
         mhz = frequency_hz / 1e6
         name = f"{stamp}_{mhz:.4f}MHz{suffix}.wav"
         path = self.audio_dir / name
-        sf.write(str(path), audio, sample_rate, subtype="PCM_16")
+        with self._lock:
+            sf.write(str(path), audio, sample_rate, subtype="PCM_16")
         return path
 
     def log(self, tx: Transmission) -> int:
@@ -163,41 +166,42 @@ class TransmissionLog:
             tx.notes,
         )
         headers = [c for c in COLUMNS if c != "id"]
-        with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
-            csv.writer(f).writerow(
-                [
-                    tx.start_utc.isoformat(),
-                    tx.end_utc.isoformat(),
-                    f"{tx.frequency_hz:.1f}",
-                    f"{tx.frequency_hz / 1e6:.6f}",
-                    tx.band_name,
-                    tx.modulation,
-                    f"{tx.peak_snr_db:.2f}",
-                    f"{tx.mean_snr_db:.2f}",
-                    f"{tx.duration_seconds:.3f}",
-                    audio_str,
-                    f"{tx.audio_rms:.5f}",
-                    f"{tx.audio_peak:.5f}",
-                    f"{tx.dynamic_range_db:.2f}",
-                    f"{tx.activity_ratio:.3f}",
-                    f"{tx.voice_score:.3f}",
-                    tx.quality,
-                    tx.quality_reason,
-                    tx.notes,
-                ]
-            )
+        with self._lock:
+            with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
+                csv.writer(f).writerow(
+                    [
+                        tx.start_utc.isoformat(),
+                        tx.end_utc.isoformat(),
+                        f"{tx.frequency_hz:.1f}",
+                        f"{tx.frequency_hz / 1e6:.6f}",
+                        tx.band_name,
+                        tx.modulation,
+                        f"{tx.peak_snr_db:.2f}",
+                        f"{tx.mean_snr_db:.2f}",
+                        f"{tx.duration_seconds:.3f}",
+                        audio_str,
+                        f"{tx.audio_rms:.5f}",
+                        f"{tx.audio_peak:.5f}",
+                        f"{tx.dynamic_range_db:.2f}",
+                        f"{tx.activity_ratio:.3f}",
+                        f"{tx.voice_score:.3f}",
+                        tx.quality,
+                        tx.quality_reason,
+                        tx.notes,
+                    ]
+                )
 
-        with self._connect() as conn:
-            cur = conn.execute(
-                f"""
-                INSERT INTO transmissions (
-                    {", ".join(headers)}
-                ) VALUES ({", ".join("?" for _ in headers)})
-                """,
-                values,
-            )
-            conn.commit()
-            row_id = int(cur.lastrowid)
+            with self._connect() as conn:
+                cur = conn.execute(
+                    f"""
+                    INSERT INTO transmissions (
+                        {", ".join(headers)}
+                    ) VALUES ({", ".join("?" for _ in headers)})
+                    """,
+                    values,
+                )
+                conn.commit()
+                row_id = int(cur.lastrowid)
 
         tag = "SAVED" if tx.quality == "accepted" else "REJECT"
         log.info(

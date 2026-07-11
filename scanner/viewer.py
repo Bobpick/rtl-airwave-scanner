@@ -848,15 +848,18 @@ PAGE = r"""
         $('utc').textContent = s.utc || '—';
         const span = Number(s.span_mhz || 2);
         const g = String(s.group || '').toUpperCase();
+        const radioTag = s.radio ? ` · radio ${s.radio}` : '';
         $('band-line').textContent =
           `${s.band || '—'}  (${g || '—'})  ` +
-          `${Number(s.center_mhz || 0).toFixed(3)} MHz · plot ±${(span/2).toFixed(2)} MHz`;
+          `${Number(s.center_mhz || 0).toFixed(3)} MHz · plot ±${(span/2).toFixed(2)} MHz${radioTag}`;
         const plan = s.plan || [];
+        const radios = s.radios || [];
         const pc = $('plan-count');
         if (pc) {
+          const multi = radios.length > 1 ? ` · ${radios.length} dongles` : '';
           pc.textContent = plan.length
-            ? `${plan.length} windows (hopping; plot = current only)`
-            : '—';
+            ? `${plan.length} windows (hopping; plot = current only)${multi}`
+            : (radios.length > 1 ? `${radios.length} dongles` : '—');
         }
         const chips = $('plan-chips');
         if (chips) {

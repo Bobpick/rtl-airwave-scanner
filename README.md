@@ -71,6 +71,34 @@ An RTL-SDR look is only **~2 MHz** wide at 2.048 Msps. Scanning “everything”
 
 **12 m (24.89–24.99 MHz)** is below most R820T sticks — not scanned.
 
+## Multi-dongle (#5)
+
+One process can drive **multiple RTL-SDRs** in parallel, each hopping its own band-group pool (faster revisit on voice nets + ATC at once).
+
+```bash
+# See serial numbers (do this after plugging the second stick)
+.venv/bin/python -m scanner --list-devices
+```
+
+In `config.yaml`:
+
+```yaml
+device:
+  gain: 40.2
+  radios:
+    - label: voice
+      serial: null                 # or explicit serial from --list-devices
+      groups: [ham_2m, ham_70cm, gmrs, murs, marine, ham_1p25m]
+    - label: atc
+      serial: "00000002"
+      groups: [atc, ham_10m, ham_6m, ham_33cm, ham_23cm]
+```
+
+- With **one** stick and no `radios:` list, behavior is unchanged (single worker).
+- With **two+** `radios:` and no `groups`, a default VHF-voice / ATC+wide split is applied.
+- Shared SQLite/CSV/WAV log; each clip is tagged `radio=<label>` in notes.
+- Live spectrum shows the most recent radio frame; `live_state.json` includes a `radios[]` status array.
+
 ## Output
 
 | Path | Content |
