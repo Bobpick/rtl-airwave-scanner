@@ -1,0 +1,114 @@
+# rtl-airwave-scanner — base configuration (generic, safe to commit)
+#
+# Site-specific ATC freqs, local repeaters, ignore lists:
+#   copy site.example.yaml → site.yaml and edit.
+#   site.yaml is gitignored and merged on top of this file automatically.
+#
+# Run:  ./run.sh -c config.yaml
+# View: ./view.sh
+
+device:
+  serial: null
+  sample_rate_hz: 2048000
+  gain: 40.2
+  ppm_error: 0
+
+detection:
+  fft_size: 8192
+  averages: 6
+  snr_threshold_db: 12.0
+  min_peak_separation_hz: 12500
+  channel_bw_hz: 12500
+  channel_step_hz: 12500
+  edge_guard_fraction: 0.10
+  min_active_seconds: 0.35
+  hang_time_seconds: 1.2
+  max_recording_seconds: 90
+  spur_learn_seconds: 6
+  spur_duty_threshold: 0.55
+  ignore_bandwidth_hz: 12000
+  # Generic ignores only (birdies). Put local AWOS in site.yaml.
+  ignored_frequencies_hz: []
+
+# Generic US calling / service labels (not location-specific)
+known_channels:
+  - { name: "2m national simplex", frequency_hz: 146520000, match_hz: 10000, kind: voice, notes: "146.520 FM calling" }
+  - { name: "70cm national simplex", frequency_hz: 446000000, match_hz: 10000, kind: voice, notes: "446.000 FM calling" }
+  - { name: "MURS 1", frequency_hz: 151820000, match_hz: 8000, kind: voice, notes: "151.820" }
+  - { name: "MURS 2", frequency_hz: 151880000, match_hz: 8000, kind: voice, notes: "151.880" }
+  - { name: "MURS 3", frequency_hz: 151940000, match_hz: 8000, kind: voice, notes: "151.940" }
+  - { name: "MURS 4", frequency_hz: 154570000, match_hz: 8000, kind: voice, notes: "154.570" }
+  - { name: "MURS 5", frequency_hz: 154600000, match_hz: 8000, kind: voice, notes: "154.600" }
+  # Full GMRS/FRS table is auto-loaded (scan.include_all_gmrs_labels)
+
+quality:
+  require_audio_quality: true
+  min_audio_rms: 0.008
+  min_dynamic_range_db: 4.0
+  min_activity_ratio: 0.04
+  min_voice_score: 0.25
+  min_speech_band_ratio: 0.20
+  keep_rejected_audio: false
+  log_rejected: false
+
+audio:
+  sample_rate_hz: 16000
+  deemphasis_tau: 75.0e-6
+
+# Generic scan windows. ATC ranges are included but disabled by default
+# in the viewer (enable_atc: false). Add local CTAF labels in site.yaml.
+bands:
+  # --- ATC / civil airband (AM). Toggle in viewer: "ATC" ---
+  - { name: "atc_118_120", start_hz: 118000000, stop_hz: 120000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_120_122", start_hz: 120000000, stop_hz: 122000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_122_124", start_hz: 122000000, stop_hz: 124000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_124_126", start_hz: 124000000, stop_hz: 126000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_126_128", start_hz: 126000000, stop_hz: 128000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_128_130", start_hz: 128000000, stop_hz: 130000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_130_132", start_hz: 130000000, stop_hz: 132000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_132_134", start_hz: 132000000, stop_hz: 134000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_134_136", start_hz: 134000000, stop_hz: 136000000, modulation: am, channel_bw_hz: 8000, group: atc }
+  - { name: "atc_136_137", start_hz: 136000000, stop_hz: 137000000, modulation: am, channel_bw_hz: 8000, group: atc }
+
+  # --- Ham ---
+  - { name: "2m_144_146", start_hz: 144000000, stop_hz: 146000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "2m_146_148", start_hz: 146000000, stop_hz: 148000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "70cm_440_442", start_hz: 440000000, stop_hz: 442000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "70cm_442_444", start_hz: 442000000, stop_hz: 444000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "70cm_444_446", start_hz: 444000000, stop_hz: 446000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "70cm_446_448", start_hz: 446000000, stop_hz: 448000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "70cm_448_450", start_hz: 448000000, stop_hz: 450000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "1.25m_222_225", start_hz: 222000000, stop_hz: 225000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+
+  # --- GMRS / FRS (all channels labeled via gmrs.py) ---
+  - { name: "gmrs_462_all", start_hz: 462500000, stop_hz: 462800000, modulation: nfm, channel_bw_hz: 12500, group: gmrs }
+  - { name: "gmrs_467_all", start_hz: 467500000, stop_hz: 467800000, modulation: nfm, channel_bw_hz: 12500, group: gmrs }
+
+  # --- MURS / marine ---
+  - { name: "murs_151_155", start_hz: 151500000, stop_hz: 153500000, modulation: nfm, channel_bw_hz: 12500, group: murs }
+  - { name: "murs_154_156", start_hz: 154000000, stop_hz: 155500000, modulation: nfm, channel_bw_hz: 12500, group: murs }
+  - { name: "marine_156_158", start_hz: 156000000, stop_hz: 158000000, modulation: nfm, channel_bw_hz: 12500, group: marine }
+  - { name: "marine_158_162", start_hz: 158000000, stop_hz: 162000000, modulation: nfm, channel_bw_hz: 12500, group: marine }
+
+output:
+  directory: recordings
+  database: recordings/transmissions.db
+  csv: recordings/transmissions.csv
+
+viewer:
+  host: 127.0.0.1
+  port: 8765
+
+squelch_file: squelch.json
+
+# Optional path to site overlay (default: site.yaml next to this file)
+site_file: site.yaml
+
+scan:
+  include_all_gmrs_labels: true
+  survey_fft_size: 2048
+  survey_averages: 2
+  hop_after_idle_looks: 2
+
+logging:
+  level: INFO

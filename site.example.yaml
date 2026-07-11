@@ -1,0 +1,52 @@
+# site.example.yaml — copy to site.yaml and customize for YOUR location
+#
+#   cp site.example.yaml site.yaml
+#   # edit site.yaml
+#
+# site.yaml is merged into the base config on startup:
+#   - known_channels           → appended (labels in logs/viewer)
+#   - bands                    → appended (extra scan windows)
+#   - ignored_frequencies_hz   → appended (e.g. local AWOS)
+#
+# Frequencies are in Hz (122.725 MHz → 122725000).
+
+site_name: "My town / airport"
+
+known_channels:
+  # --- ATC voice (replace with YOUR charted freqs) ---
+  - name: "CTAF/UNICOM"
+    frequency_hz: 122800000
+    match_hz: 12000
+    kind: voice
+    notes: "Example CTAF — change me"
+
+  # --- Local ham repeater ---
+  - name: "Local 70cm repeater"
+    frequency_hz: 444975000
+    match_hz: 10000
+    kind: voice
+    notes: "output · + offset · PL · OPEN FM"
+  - name: "Local 70cm input"
+    frequency_hz: 449975000
+    match_hz: 10000
+    kind: voice
+    notes: "repeater input (+5 MHz)"
+
+# Extra priority windows (optional — base config already has broad ATC/ham/GMRS)
+bands:
+  - name: "atc_my_ctaf"
+    start_hz: 122000000
+    stop_hz: 123500000
+    modulation: am
+    channel_bw_hz: 8000
+    group: atc
+  - name: "ham_my_repeater"
+    start_hz: 444000000
+    stop_hz: 446000000
+    modulation: nfm
+    channel_bw_hz: 12500
+    group: ham
+
+# Continuous weather / birdies you never want recorded
+ignored_frequencies_hz:
+  - 119925000   # example AWOS — change/remove

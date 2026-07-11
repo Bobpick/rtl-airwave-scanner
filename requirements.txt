@@ -1,0 +1,9 @@
+numpy>=1.26
+scipy>=1.11
+# 0.5 needs librtlsdr symbols not in all builds; 0.3 works with osmocom librtlsdr
+pyrtlsdr==0.3.0
+soundfile>=0.12
+PyYAML>=6.0
+Flask>=3.0
+# pyrtlsdr 0.3 imports pkg_resources (setuptools < 81)
+setuptools>=70,<81

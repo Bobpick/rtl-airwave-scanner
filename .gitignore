@@ -1,0 +1,17 @@
+# Local / runtime (never commit)
+.venv/
+prefix/
+lib/
+include/
+recordings/
+squelch.json
+site.yaml
+config.yaml
+*.pyc
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+*.log
+nohup.out
+.DS_Store
