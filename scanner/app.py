@@ -13,7 +13,7 @@ import numpy as np
 
 from scanner.audio_quality import analyze_audio
 from scanner.config import Band, Config
-from scanner.demod import demodulate
+from scanner.demod import ChannelDemod, normalize_audio
 from scanner.lockfile import acquire as acquire_lock
 from scanner.recorder import Transmission, TransmissionLog, utcnow
 from scanner.sdr import IqBlock, RtlSdrSource
@@ -31,9 +31,11 @@ class ActiveTrack:
     last_seen: float
     peak_snr_db: float
     snr_samples: list[float] = field(default_factory=list)
-    audio_chunks: list[np.ndarray] = field(default_factory=list)
+    audio_chunks: list[np.ndarray] = field(default_factory=list)  # raw (pre-norm)
     recording: bool = False
     start_time: object | None = None
+    demod: ChannelDemod | None = None
+    looks_above: int = 0  # consecutive looks meeting RF arm threshold
 
 
 class ScannerApp:
@@ -289,11 +291,45 @@ class ScannerApp:
         else:
             log.info("Spur learning done: no persistent carriers found")
 
+    def _rf_armed(self, track: ActiveTrack) -> bool:
+        """Require sustained SNR before starting a recording (cuts hop noise / blips)."""
+        thr = self.cfg.snr_threshold_db
+        if not track.snr_samples:
+            return False
+        # Time on frequency
+        if (track.last_seen - track.first_seen) < self.cfg.min_active_seconds:
+            return False
+        # Recent looks must stay near threshold (not a single spike)
+        recent = track.snr_samples[-5:]
+        if len(recent) < 3:
+            return False
+        if float(np.mean(recent)) < thr - 3.0:
+            return False
+        if float(np.min(recent)) < thr - 6.0:
+            return False
+        # Prefer several consecutive above-threshold looks
+        if track.looks_above < 3:
+            return False
+        return True
+
+    def _ensure_demod(self, track: ActiveTrack, band: Band) -> ChannelDemod:
+        tau = None if band.modulation == "am" else self.cfg.deemphasis_tau
+        if track.demod is None or abs(track.demod.freq_hz - track.frequency_hz) > 1.0:
+            track.demod = ChannelDemod(
+                freq_hz=track.frequency_hz,
+                sample_rate=self.sdr.sample_rate,
+                channel_bw_hz=self._channel_bw(band),
+                modulation=band.modulation,
+                audio_rate=self.cfg.audio_sample_rate_hz,
+                deemphasis_tau=tau,
+            )
+        return track.demod
+
     def _update_tracks(self, band: Band, peaks, iq: np.ndarray, center: float, now: float) -> None:
         # During spur learning, still observe hits but do not start recordings
         learning = not self._learning_done
         seen_keys = set()
-        ch_bw = self._channel_bw(band)
+        thr = self.cfg.snr_threshold_db
 
         for peak in peaks:
             key = self._quantize(peak.frequency_hz, band)
@@ -309,6 +345,7 @@ class ScannerApp:
                     last_seen=now,
                     peak_snr_db=peak.snr_db,
                     snr_samples=[peak.snr_db],
+                    looks_above=1 if peak.snr_db >= thr - 3.0 else 0,
                 )
                 self.tracks[key] = track
                 log.debug("New energy @ %.4f MHz snr=%.1f", channel_hz / 1e6, peak.snr_db)
@@ -317,38 +354,39 @@ class ScannerApp:
                 track.frequency_hz = channel_hz
                 track.peak_snr_db = max(track.peak_snr_db, peak.snr_db)
                 track.snr_samples.append(peak.snr_db)
+                if len(track.snr_samples) > 40:
+                    track.snr_samples = track.snr_samples[-40:]
+                if peak.snr_db >= thr - 3.0:
+                    track.looks_above += 1
+                else:
+                    track.looks_above = 0
 
             if learning:
                 continue
 
-            active_for = now - track.first_seen
-            if not track.recording and active_for >= self.cfg.min_active_seconds:
+            # RF arming: do not START on a single FFT spike
+            if not track.recording and self._rf_armed(track):
                 track.recording = True
                 track.start_time = utcnow()
+                track.demod = None  # fresh demod state at record start
                 ch = self.cfg.match_channel(track.frequency_hz)
                 label = f"  [{ch.name}]" if ch else ""
+                mean_r = float(np.mean(track.snr_samples[-5:]))
                 log.info(
-                    "START  %.4f MHz  band=%s  snr=%.1f dB%s",
+                    "START  %.4f MHz  band=%s  snr=%.1f (mean5=%.1f) dB%s",
                     track.frequency_hz / 1e6,
                     band.name,
                     track.peak_snr_db,
+                    mean_r,
                     label,
                 )
 
             if track.recording:
-                # AM: no de-emphasis. NFM/FM: use configured tau (US 75 µs).
-                tau = None if band.modulation == "am" else self.cfg.deemphasis_tau
-                audio = demodulate(
-                    iq,
-                    self.sdr.sample_rate,
-                    center,
-                    track.frequency_hz,
-                    ch_bw,
-                    band.modulation,
-                    self.cfg.audio_sample_rate_hz,
-                    tau,
-                )
-                track.audio_chunks.append(audio)
+                dem = self._ensure_demod(track, band)
+                # Raw audio — normalize once at finalize
+                audio = dem.process(iq, center, self.sdr.sample_rate)
+                if len(audio):
+                    track.audio_chunks.append(audio)
 
                 if track.start_time is not None:
                     elapsed = (utcnow() - track.start_time).total_seconds()
@@ -359,8 +397,9 @@ class ScannerApp:
         for key, track in list(self.tracks.items()):
             if key in seen_keys:
                 continue
+            # Decay arm counter when peak disappears
+            track.looks_above = 0
             if learning:
-                # drop non-persistent during learn without saving
                 if now - track.last_seen >= hang:
                     self.tracks.pop(key, None)
                 continue
@@ -378,14 +417,16 @@ class ScannerApp:
             return
 
         mean_snr = float(np.mean(track.snr_samples)) if track.snr_samples else track.peak_snr_db
-        audio = None
+        audio_raw = None
+        audio_out = None
         metrics = None
         if track.audio_chunks:
-            audio = np.concatenate(track.audio_chunks)
-            # Open squelch when voice slider is low; always looser for AM ATC
+            audio_raw = np.concatenate(track.audio_chunks)
+            # Quality on *pre-normalize* audio so pure noise cannot be boosted into "speech"
             loose = self.cfg.min_voice_score <= 0.30 or band.modulation == "am"
+            raw_rms = float(np.sqrt(np.mean(np.square(audio_raw.astype(np.float64))))) if len(audio_raw) else 0.0
             metrics = analyze_audio(
-                audio,
+                audio_raw,
                 self.cfg.audio_sample_rate_hz,
                 min_rms=self.cfg.min_audio_rms,
                 min_dynamic_range_db=self.cfg.min_dynamic_range_db,
@@ -394,7 +435,7 @@ class ScannerApp:
                 min_speech_band_ratio=self.cfg.min_speech_band_ratio,
                 loose=loose,
             )
-            # Only apply steady-SNR reject when squelch is tight (not open)
+            # Steady RF carrier (low SNR variance) with weak audio dynamics → reject when tight
             if (
                 not loose
                 and track.snr_samples
@@ -414,16 +455,36 @@ class ScannerApp:
                         is_likely_signal=False,
                         reason=(metrics.reason + ",steady_snr").strip(","),
                     )
+            # Extra: very weak pre-norm RMS is almost always static after AGC
+            if (
+                not loose
+                and metrics is not None
+                and metrics.is_likely_signal
+                and raw_rms < self.cfg.min_audio_rms * 0.35
+            ):
+                metrics = type(metrics)(
+                    rms=metrics.rms,
+                    peak=metrics.peak,
+                    dynamic_range_db=metrics.dynamic_range_db,
+                    activity_ratio=metrics.activity_ratio,
+                    spectral_flux=metrics.spectral_flux,
+                    speech_band_ratio=metrics.speech_band_ratio,
+                    voice_score=metrics.voice_score,
+                    is_likely_signal=False,
+                    reason=(metrics.reason + ",weak_raw_rms").strip(","),
+                )
+            # Peak-normalize once for listening / save
+            audio_out = normalize_audio(audio_raw)
 
         quality = "accepted"
         reason = "ok"
         audio_path = None
         min_samples = int(self.cfg.audio_sample_rate_hz * 0.25)
 
-        if metrics is None or audio is None:
+        if metrics is None or audio_out is None:
             quality = "rejected"
             reason = "no_audio"
-        elif len(audio) < min_samples:
+        elif len(audio_out) < min_samples:
             quality = "rejected"
             reason = "audio_too_short"
         elif self.cfg.require_audio_quality and not metrics.is_likely_signal:
@@ -431,7 +492,7 @@ class ScannerApp:
             reason = metrics.reason
         else:
             audio_path = self.logger.save_audio(
-                audio,
+                audio_out,
                 self.cfg.audio_sample_rate_hz,
                 track.frequency_hz,
                 track.start_time,
@@ -448,11 +509,11 @@ class ScannerApp:
             )
             if (
                 self.cfg.keep_rejected_audio
-                and audio is not None
-                and len(audio) > min_samples
+                and audio_out is not None
+                and len(audio_out) > min_samples
             ):
                 audio_path = self.logger.save_audio(
-                    audio,
+                    audio_out,
                     self.cfg.audio_sample_rate_hz,
                     track.frequency_hz,
                     track.start_time,
@@ -460,11 +521,12 @@ class ScannerApp:
                 )
         else:
             log.info(
-                "ACCEPT %.4f MHz  voice=%.2f act=%.0f%% snr=%.1f",
+                "ACCEPT %.4f MHz  voice=%.2f act=%.0f%% snr=%.1f mean_snr=%.1f",
                 track.frequency_hz / 1e6,
                 metrics.voice_score if metrics else 0.0,
                 (metrics.activity_ratio * 100) if metrics else 0.0,
                 track.peak_snr_db,
+                mean_snr,
             )
 
         ch = self.cfg.match_channel(track.frequency_hz)
