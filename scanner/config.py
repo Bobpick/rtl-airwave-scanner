@@ -37,7 +37,12 @@ def infer_band_group(name: str) -> str:
         return "murs"
     if n.startswith("marine"):
         return "marine"
-    if any(n.startswith(p) for p in ("2m", "70cm", "1.25m", "6m", "33cm", "ham")):
+    # All amateur allocations we hop (10m…23cm, including name prefixes like 1p25m)
+    ham_prefixes = (
+        "2m", "6m", "10m", "70cm", "33cm", "23cm",
+        "1p25", "1.25", "ham", "uhf", "vhf",
+    )
+    if any(n.startswith(p) for p in ham_prefixes):
         return "ham"
     if "kd6vlr" in n or "repeater" in n:
         return "ham"
