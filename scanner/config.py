@@ -13,9 +13,8 @@ class Band:
     start_hz: int
     stop_hz: int
     modulation: str = "nfm"
-    # Override global channel BW (airband often 8.33 or 25 kHz)
     channel_bw_hz: float | None = None
-    # Logical group for live enable/disable (atc, ham, gmrs, murs, marine, other)
+    # Group for UI toggles: atc, gmrs, murs, marine, ham_2m, ham_70cm, …
     group: str = "other"
 
     @property
@@ -28,8 +27,9 @@ class Band:
 
 
 def infer_band_group(name: str) -> str:
+    """Map window name → UI toggle group (ham split by meters)."""
     n = name.lower()
-    if n.startswith("atc") or "airband" in n or "air_" in n:
+    if n.startswith("atc") or "airband" in n or n.startswith("air_"):
         return "atc"
     if n.startswith("gmrs") or n.startswith("frs"):
         return "gmrs"
@@ -37,15 +37,22 @@ def infer_band_group(name: str) -> str:
         return "murs"
     if n.startswith("marine"):
         return "marine"
-    # All amateur allocations we hop (10m…23cm, including name prefixes like 1p25m)
-    ham_prefixes = (
-        "2m", "6m", "10m", "70cm", "33cm", "23cm",
-        "1p25", "1.25", "ham", "uhf", "vhf",
-    )
-    if any(n.startswith(p) for p in ham_prefixes):
-        return "ham"
-    if "kd6vlr" in n or "repeater" in n:
-        return "ham"
+    if n.startswith("10m"):
+        return "ham_10m"
+    if n.startswith("6m"):
+        return "ham_6m"
+    if n.startswith("2m"):
+        return "ham_2m"
+    if n.startswith("1p25") or n.startswith("1.25"):
+        return "ham_1p25m"
+    if n.startswith("70cm") or "kd6vlr" in n:
+        return "ham_70cm"
+    if n.startswith("33cm"):
+        return "ham_33cm"
+    if n.startswith("23cm"):
+        return "ham_23cm"
+    if n.startswith("ham") or "repeater" in n:
+        return "ham_2m"  # fallback
     return "other"
 
 
@@ -54,7 +61,7 @@ class KnownChannel:
     name: str
     frequency_hz: float
     match_hz: float = 8000.0
-    kind: str = "voice"  # voice | weather | navaid
+    kind: str = "voice"
     notes: str = ""
 
 
@@ -73,14 +80,11 @@ class Config:
     min_active_seconds: float = 0.6
     hang_time_seconds: float = 2.0
     max_recording_seconds: float = 90.0
-    # Auto-blacklist frequencies that stay "up" most of the time
     spur_learn_seconds: float = 45.0
     spur_duty_threshold: float = 0.55
-    # Static ignore list (Hz)
     ignored_frequencies_hz: list[float] = field(default_factory=list)
     ignore_bandwidth_hz: float = 15_000
     channel_step_hz: float = 25_000
-    # Audio quality gates
     require_audio_quality: bool = True
     min_audio_rms: float = 0.015
     min_dynamic_range_db: float = 7.0
@@ -88,7 +92,7 @@ class Config:
     min_voice_score: float = 0.40
     min_speech_band_ratio: float = 0.35
     keep_rejected_audio: bool = False
-    log_rejected: bool = False  # if true, still save but mark rejected
+    log_rejected: bool = False
     audio_sample_rate_hz: int = 16_000
     deemphasis_tau: float | None = 75e-6
     bands: list[Band] = field(default_factory=list)
@@ -100,7 +104,6 @@ class Config:
     viewer_host: str = "127.0.0.1"
     viewer_port: int = 8765
     squelch_file: Path = Path("squelch.json")
-    # Fast survey (idle hop) vs dwell (recording)
     survey_fft_size: int = 2048
     survey_averages: int = 2
     hop_after_idle_looks: int = 2
@@ -112,6 +115,15 @@ class Config:
     enable_murs: bool = True
     enable_marine: bool = True
     enable_other: bool = True
+    enable_ham_10m: bool = True
+    enable_ham_6m: bool = True
+    enable_ham_2m: bool = True
+    enable_ham_1p25m: bool = True
+    enable_ham_70cm: bool = True
+    enable_ham_33cm: bool = True
+    enable_ham_23cm: bool = True
+    operator_callsign: str = ""
+    operator_class: str = ""
 
     def match_channel(self, frequency_hz: float) -> KnownChannel | None:
         best: KnownChannel | None = None
@@ -124,7 +136,6 @@ class Config:
         return best
 
     def is_protected_frequency(self, frequency_hz: float) -> bool:
-        """Known published channels should not be spur-blacklisted."""
         return self.match_channel(frequency_hz) is not None
 
     @staticmethod
@@ -160,7 +171,6 @@ class Config:
 
     @classmethod
     def _merge_site(cls, base_path: Path, raw: dict[str, Any]) -> dict[str, Any]:
-        """Merge optional site.yaml overlay (local ATC, repeaters, ignores)."""
         site_name = raw.get("site_file", "site.yaml")
         site_path = Path(site_name)
         if not site_path.is_absolute():
@@ -171,12 +181,10 @@ class Config:
         with open(site_path, encoding="utf-8") as f:
             site: dict[str, Any] = yaml.safe_load(f) or {}
 
-        # Append site channels / bands / ignores (site takes priority for labels)
         raw = dict(raw)
         raw["known_channels"] = list(raw.get("known_channels") or []) + list(
             site.get("known_channels") or []
         )
-        # Site bands first so local priority windows are scanned earlier when both enabled
         raw["bands"] = list(site.get("bands") or []) + list(raw.get("bands") or [])
         detection = dict(raw.get("detection") or {})
         ignored = list(detection.get("ignored_frequencies_hz") or [])
@@ -185,6 +193,10 @@ class Config:
         raw["detection"] = detection
         if site.get("site_name"):
             raw["_site_name"] = site["site_name"]
+        if site.get("operator_callsign"):
+            raw["operator_callsign"] = site["operator_callsign"]
+        if site.get("operator_class"):
+            raw["operator_class"] = site["operator_class"]
         return raw
 
     @classmethod
@@ -208,7 +220,6 @@ class Config:
         if not bands:
             raise ValueError("config must define at least one band under 'bands'")
 
-        # De-dupe band names (site may re-add priority windows already in base)
         seen_names: set[str] = set()
         unique_bands: list[Band] = []
         for b in bands:
@@ -273,10 +284,20 @@ class Config:
             survey_averages=int(scan.get("survey_averages", 2)),
             hop_after_idle_looks=int(scan.get("hop_after_idle_looks", 2)),
             include_all_gmrs_labels=include_gmrs,
+            operator_callsign=str(raw.get("operator_callsign") or ""),
+            operator_class=str(raw.get("operator_class") or ""),
         )
         site_name = raw.get("_site_name")
         if site_name:
             import logging
 
             logging.getLogger(__name__).info("Site overlay loaded: %s", site_name)
+        if cfg.operator_callsign:
+            import logging
+
+            logging.getLogger(__name__).info(
+                "Operator: %s %s",
+                cfg.operator_callsign,
+                cfg.operator_class or "",
+            )
         return cfg

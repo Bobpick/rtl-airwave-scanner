@@ -411,22 +411,48 @@ PAGE = r"""
     .empty { color: var(--muted); text-align: center; padding: 1.5rem; }
     code { color: #86c7fa; }
     .shutdown-btn {
-      margin-left: .5rem;
-      padding: .35rem .75rem;
-      border-radius: 6px;
-      border: 1px solid #8f4f5b;
-      background: rgba(180, 60, 70, .25);
-      color: #ffb4b4;
-      font-size: .78rem;
-      font-weight: 600;
+      margin-left: .75rem;
+      padding: .45rem 1rem;
+      border-radius: 8px;
+      border: 1px solid #e07080;
+      background: #b83a48;
+      color: #fff;
+      font-size: .82rem;
+      font-weight: 700;
       cursor: pointer;
-      letter-spacing: .02em;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+      box-shadow: 0 2px 8px rgba(180,40,50,.4);
+      flex-shrink: 0;
     }
     .shutdown-btn:hover {
-      background: rgba(200, 70, 80, .4);
+      background: #d04555;
       color: #fff;
-      border-color: #c06070;
+      border-color: #ff90a0;
     }
+    .shutdown-side {
+      width: 100%;
+      margin-top: 1.1rem;
+      padding: .55rem .75rem;
+      border-radius: 8px;
+      border: 1px solid #e07080;
+      background: #b83a48;
+      color: #fff;
+      font-size: .85rem;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: .03em;
+    }
+    .shutdown-side:hover { background: #d04555; }
+    .ham-sub {
+      margin: .25rem 0 .55rem .85rem;
+      padding-left: .65rem;
+      border-left: 2px solid #2a4a6a;
+      display: flex;
+      flex-direction: column;
+      gap: .22rem;
+    }
+    .ham-sub label { font-size: .8rem !important; }
     .shutdown-msg {
       min-height: 60vh; display: flex; align-items: center; justify-content: center;
       flex-direction: column; gap: .75rem; color: var(--muted); text-align: center;
@@ -441,6 +467,7 @@ PAGE = r"""
       <div class="topbar">
         <div class="brand">RTL Airwave Scanner</div>
         <div class="meta">
+          <span>OP: <b id="operator">—</b></span>
           <span>SITE: <b id="site">—</b></span>
           <span>MODE: <b class="mode" id="mode">—</b></span>
           <span>GAIN: <b id="gain">—</b></span>
@@ -453,17 +480,27 @@ PAGE = r"""
         <aside class="sidebar">
           <h3>WHICH BANDS TO SCAN</h3>
           <p style="margin:0 0 .75rem;font-size:.72rem;color:var(--muted);line-height:1.35;">
-            One RTL-SDR = one ~2&nbsp;MHz window at a time. Checked groups are
-            <b style="color:var(--text)">hopped in rotation</b> (not all at once).
+            One RTL-SDR = one ~2&nbsp;MHz window at a time. Checked bands are
+            <b style="color:var(--text)">hopped in rotation</b>.
           </p>
           <div class="groups" style="margin-top:0;">
             <label><input type="checkbox" id="enable_atc"/> ATC <span class="muted">(118–137 AM)</span></label>
-            <label><input type="checkbox" id="enable_ham" checked/> HAM <span class="muted">(2m / 70cm / …)</span></label>
+            <label><input type="checkbox" id="enable_ham" checked/> <strong>HAM</strong> <span class="muted">(all meters)</span></label>
+            <div class="ham-sub" id="ham-meters">
+              <label><input type="checkbox" id="enable_ham_10m" checked/> 10 m <span class="muted">(28–29.7)</span></label>
+              <label><input type="checkbox" id="enable_ham_6m" checked/> 6 m <span class="muted">(50–54)</span></label>
+              <label><input type="checkbox" id="enable_ham_2m" checked/> 2 m <span class="muted">(144–148)</span></label>
+              <label><input type="checkbox" id="enable_ham_1p25m" checked/> 1.25 m <span class="muted">(222–225)</span></label>
+              <label><input type="checkbox" id="enable_ham_70cm" checked/> 70 cm <span class="muted">(420–450)</span></label>
+              <label><input type="checkbox" id="enable_ham_33cm" checked/> 33 cm <span class="muted">(902–928)</span></label>
+              <label><input type="checkbox" id="enable_ham_23cm" checked/> 23 cm <span class="muted">(1240–1300)</span></label>
+            </div>
             <label><input type="checkbox" id="enable_gmrs" checked/> GMRS/FRS <span class="muted">(462 / 467)</span></label>
             <label><input type="checkbox" id="enable_marine" checked/> MARINE <span class="muted">(156–162)</span></label>
             <label><input type="checkbox" id="enable_murs" checked/> MURS <span class="muted">(151–155)</span></label>
           </div>
           <div class="saved" id="bg-saved">saved</div>
+          <button type="button" class="shutdown-side" id="shutdown-side">Shutdown scanner</button>
 
           <h3 style="margin-top:1.25rem;">RECORDING THRESHOLDS</h3>
           <p style="margin:0 0 .65rem;font-size:.72rem;color:var(--muted);line-height:1.35;">
@@ -603,16 +640,30 @@ PAGE = r"""
       $('min_voice_score').value = s.min_voice_score;
       $('min_activity_ratio').value = s.min_activity_ratio;
       $('min_dynamic_range_db').value = s.min_dynamic_range_db;
+      const meters = ['enable_ham_10m','enable_ham_6m','enable_ham_2m','enable_ham_1p25m','enable_ham_70cm','enable_ham_33cm','enable_ham_23cm'];
       $('enable_atc').checked = !!s.enable_atc;
-      $('enable_ham').checked = s.enable_ham !== false;
+      meters.forEach(id => { if ($(id)) $(id).checked = s[id] !== false; });
+      $('enable_ham').checked = s.enable_ham !== false && meters.some(id => $(id) && $(id).checked);
       $('enable_gmrs').checked = s.enable_gmrs !== false;
       $('enable_murs').checked = s.enable_murs !== false;
       $('enable_marine').checked = s.enable_marine !== false;
       updateLabels();
     }
 
+    function meterIds() {
+      return ['enable_ham_10m','enable_ham_6m','enable_ham_2m','enable_ham_1p25m','enable_ham_70cm','enable_ham_33cm','enable_ham_23cm'];
+    }
+
     async function saveSquelch(fromBands) {
       updateLabels();
+      const meters = meterIds();
+      // Master HAM toggles all meters
+      if (fromBands === 'ham-master') {
+        const on = $('enable_ham').checked;
+        meters.forEach(id => { if ($(id)) $(id).checked = on; });
+      } else if (fromBands === 'ham-meter') {
+        $('enable_ham').checked = meters.some(id => $(id) && $(id).checked);
+      }
       const body = {
         snr_threshold_db: Number($('snr_threshold_db').value),
         min_voice_score: Number($('min_voice_score').value),
@@ -624,6 +675,7 @@ PAGE = r"""
         enable_murs: $('enable_murs').checked,
         enable_marine: $('enable_marine').checked,
       };
+      meters.forEach(id => { body[id] = !!( $(id) && $(id).checked ); });
       await fetch('/api/squelch', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
@@ -641,8 +693,13 @@ PAGE = r"""
     ['snr_threshold_db','min_voice_score','min_activity_ratio','min_dynamic_range_db'].forEach(id => {
       $(id).addEventListener('input', scheduleSave);
     });
-    ['enable_atc','enable_ham','enable_gmrs','enable_murs','enable_marine'].forEach(id => {
-      $(id).addEventListener('change', () => saveSquelch(true));
+    $('enable_atc').addEventListener('change', () => saveSquelch(true));
+    $('enable_gmrs').addEventListener('change', () => saveSquelch(true));
+    $('enable_murs').addEventListener('change', () => saveSquelch(true));
+    $('enable_marine').addEventListener('change', () => saveSquelch(true));
+    $('enable_ham').addEventListener('change', () => saveSquelch('ham-master'));
+    meterIds().forEach(id => {
+      if ($(id)) $(id).addEventListener('change', () => saveSquelch('ham-meter'));
     });
 
     function drawSpectrum(state) {
@@ -916,7 +973,7 @@ PAGE = r"""
       await fetch('/api/purge_rejected', {method:'POST'});
       loadRows();
     };
-    $('shutdown').onclick = async () => {
+    async function doShutdown() {
       if (!confirm('Stop the scanner and close the dashboard?\n\n(The USB dongle will be released.)')) return;
       try {
         await fetch('/api/shutdown', {method: 'POST'});
@@ -927,7 +984,15 @@ PAGE = r"""
         '<p>Scanner and dashboard are shut down. You can close this tab.</p>' +
         '<p style="font-size:.85rem">Start again from the app menu or <code>./start-background.sh</code></p>' +
         '</div>';
-    };
+    }
+    $('shutdown').onclick = doShutdown;
+    if ($('shutdown-side')) $('shutdown-side').onclick = doShutdown;
+
+    // Operator callsign (from site.yaml via /api/status)
+    fetch('/api/status').then(r => r.json()).then(s => {
+      const op = [s.operator_callsign, s.operator_class].filter(Boolean).join(' · ');
+      if (op && $('operator')) $('operator').textContent = op;
+    }).catch(() => {});
 
     loadSquelch();
     loadLive();
@@ -969,6 +1034,16 @@ def create_app(cfg: Config) -> Flask:
         if not state:
             return jsonify({}), 204
         return jsonify(state)
+
+    @app.get("/api/status")
+    def api_status():
+        return jsonify(
+            {
+                "operator_callsign": getattr(cfg, "operator_callsign", "") or "",
+                "operator_class": getattr(cfg, "operator_class", "") or "",
+                "viewer_pid": os.getpid(),
+            }
+        )
 
     @app.get("/api/squelch")
     def api_squelch_get():

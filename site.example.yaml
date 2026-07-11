@@ -11,6 +11,9 @@
 # Frequencies are in Hz (122.725 MHz → 122725000).
 
 site_name: "My town / airport"
+# Optional — shown in the dashboard header
+operator_callsign: "N0CALL"
+operator_class: "General"
 
 known_channels:
   # --- ATC voice (replace with YOUR charted freqs) ---

@@ -74,14 +74,14 @@ bands:
   # ========== Tier 1: local voice / mutual aid (highest priority) ==========
   # 2 m
 
-  - { name: "2m_144_146", start_hz: 144000000, stop_hz: 146000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "2m_146_148", start_hz: 146000000, stop_hz: 148000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "2m_144_146", start_hz: 144000000, stop_hz: 146000000, modulation: nfm, channel_bw_hz: 12500, group: ham_2m }
+  - { name: "2m_146_148", start_hz: 146000000, stop_hz: 148000000, modulation: nfm, channel_bw_hz: 12500, group: ham_2m }
   # 70 cm — dense FM/repeater segment first
-  - { name: "70cm_440_442", start_hz: 440000000, stop_hz: 442000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_442_444", start_hz: 442000000, stop_hz: 444000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_444_446", start_hz: 444000000, stop_hz: 446000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_446_448", start_hz: 446000000, stop_hz: 448000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_448_450", start_hz: 448000000, stop_hz: 450000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "70cm_440_442", start_hz: 440000000, stop_hz: 442000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_442_444", start_hz: 442000000, stop_hz: 444000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_444_446", start_hz: 444000000, stop_hz: 446000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_446_448", start_hz: 446000000, stop_hz: 448000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_448_450", start_hz: 448000000, stop_hz: 450000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
   # GMRS / FRS
   - { name: "gmrs_462_all", start_hz: 462500000, stop_hz: 462800000, modulation: nfm, channel_bw_hz: 12500, group: gmrs }
   - { name: "gmrs_467_all", start_hz: 467500000, stop_hz: 467800000, modulation: nfm, channel_bw_hz: 12500, group: gmrs }
@@ -92,73 +92,73 @@ bands:
   - { name: "marine_156_158", start_hz: 156000000, stop_hz: 158000000, modulation: nfm, channel_bw_hz: 12500, group: marine }
   - { name: "marine_158_162", start_hz: 158000000, stop_hz: 162000000, modulation: nfm, channel_bw_hz: 12500, group: marine }
   # 1.25 m
-  - { name: "1p25m_222_224", start_hz: 222000000, stop_hz: 224000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "1p25m_224_225", start_hz: 224000000, stop_hz: 225000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "1p25m_222_224", start_hz: 222000000, stop_hz: 224000000, modulation: nfm, channel_bw_hz: 12500, group: ham_1p25m }
+  - { name: "1p25m_224_225", start_hz: 224000000, stop_hz: 225000000, modulation: nfm, channel_bw_hz: 12500, group: ham_1p25m }
 
   # ========== Tier 2: other VHF / upper HF ==========
   # 6 m (50–54)
-  - { name: "6m_50_52", start_hz: 50000000, stop_hz: 52000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "6m_52_54", start_hz: 52000000, stop_hz: 54000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "6m_50_52", start_hz: 50000000, stop_hz: 52000000, modulation: nfm, channel_bw_hz: 12500, group: ham_6m }
+  - { name: "6m_52_54", start_hz: 52000000, stop_hz: 54000000, modulation: nfm, channel_bw_hz: 12500, group: ham_6m }
   # 10 m (28.0–29.7) — R820T ok; SSB is energy-detect only with NFM demod
-  - { name: "10m_28_29", start_hz: 28000000, stop_hz: 29700000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "10m_28_29", start_hz: 28000000, stop_hz: 29700000, modulation: nfm, channel_bw_hz: 12500, group: ham_10m }
 
   # ========== Tier 3: full 70 cm + microwave ham ==========
   # 70 cm lower half (420–440)
-  - { name: "70cm_420_422", start_hz: 420000000, stop_hz: 422000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_422_424", start_hz: 422000000, stop_hz: 424000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_424_426", start_hz: 424000000, stop_hz: 426000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_426_428", start_hz: 426000000, stop_hz: 428000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_428_430", start_hz: 428000000, stop_hz: 430000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_430_432", start_hz: 430000000, stop_hz: 432000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_432_434", start_hz: 432000000, stop_hz: 434000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_434_436", start_hz: 434000000, stop_hz: 436000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_436_438", start_hz: 436000000, stop_hz: 438000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "70cm_438_440", start_hz: 438000000, stop_hz: 440000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "70cm_420_422", start_hz: 420000000, stop_hz: 422000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_422_424", start_hz: 422000000, stop_hz: 424000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_424_426", start_hz: 424000000, stop_hz: 426000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_426_428", start_hz: 426000000, stop_hz: 428000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_428_430", start_hz: 428000000, stop_hz: 430000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_430_432", start_hz: 430000000, stop_hz: 432000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_432_434", start_hz: 432000000, stop_hz: 434000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_434_436", start_hz: 434000000, stop_hz: 436000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_436_438", start_hz: 436000000, stop_hz: 438000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
+  - { name: "70cm_438_440", start_hz: 438000000, stop_hz: 440000000, modulation: nfm, channel_bw_hz: 12500, group: ham_70cm }
   # 33 cm (902–928)
-  - { name: "33cm_902_904", start_hz: 902000000, stop_hz: 904000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_904_906", start_hz: 904000000, stop_hz: 906000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_906_908", start_hz: 906000000, stop_hz: 908000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_908_910", start_hz: 908000000, stop_hz: 910000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_910_912", start_hz: 910000000, stop_hz: 912000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_912_914", start_hz: 912000000, stop_hz: 914000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_914_916", start_hz: 914000000, stop_hz: 916000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_916_918", start_hz: 916000000, stop_hz: 918000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_918_920", start_hz: 918000000, stop_hz: 920000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_920_922", start_hz: 920000000, stop_hz: 922000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_922_924", start_hz: 922000000, stop_hz: 924000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_924_926", start_hz: 924000000, stop_hz: 926000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "33cm_926_928", start_hz: 926000000, stop_hz: 928000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "33cm_902_904", start_hz: 902000000, stop_hz: 904000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_904_906", start_hz: 904000000, stop_hz: 906000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_906_908", start_hz: 906000000, stop_hz: 908000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_908_910", start_hz: 908000000, stop_hz: 910000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_910_912", start_hz: 910000000, stop_hz: 912000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_912_914", start_hz: 912000000, stop_hz: 914000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_914_916", start_hz: 914000000, stop_hz: 916000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_916_918", start_hz: 916000000, stop_hz: 918000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_918_920", start_hz: 918000000, stop_hz: 920000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_920_922", start_hz: 920000000, stop_hz: 922000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_922_924", start_hz: 922000000, stop_hz: 924000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_924_926", start_hz: 924000000, stop_hz: 926000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
+  - { name: "33cm_926_928", start_hz: 926000000, stop_hz: 928000000, modulation: nfm, channel_bw_hz: 12500, group: ham_33cm }
   # 23 cm (1240–1300)
-  - { name: "23cm_1240_1242", start_hz: 1240000000, stop_hz: 1242000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1242_1244", start_hz: 1242000000, stop_hz: 1244000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1244_1246", start_hz: 1244000000, stop_hz: 1246000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1246_1248", start_hz: 1246000000, stop_hz: 1248000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1248_1250", start_hz: 1248000000, stop_hz: 1250000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1250_1252", start_hz: 1250000000, stop_hz: 1252000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1252_1254", start_hz: 1252000000, stop_hz: 1254000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1254_1256", start_hz: 1254000000, stop_hz: 1256000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1256_1258", start_hz: 1256000000, stop_hz: 1258000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1258_1260", start_hz: 1258000000, stop_hz: 1260000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1260_1262", start_hz: 1260000000, stop_hz: 1262000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1262_1264", start_hz: 1262000000, stop_hz: 1264000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1264_1266", start_hz: 1264000000, stop_hz: 1266000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1266_1268", start_hz: 1266000000, stop_hz: 1268000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1268_1270", start_hz: 1268000000, stop_hz: 1270000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1270_1272", start_hz: 1270000000, stop_hz: 1272000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1272_1274", start_hz: 1272000000, stop_hz: 1274000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1274_1276", start_hz: 1274000000, stop_hz: 1276000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1276_1278", start_hz: 1276000000, stop_hz: 1278000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1278_1280", start_hz: 1278000000, stop_hz: 1280000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1280_1282", start_hz: 1280000000, stop_hz: 1282000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1282_1284", start_hz: 1282000000, stop_hz: 1284000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1284_1286", start_hz: 1284000000, stop_hz: 1286000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1286_1288", start_hz: 1286000000, stop_hz: 1288000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1288_1290", start_hz: 1288000000, stop_hz: 1290000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1290_1292", start_hz: 1290000000, stop_hz: 1292000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1292_1294", start_hz: 1292000000, stop_hz: 1294000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1294_1296", start_hz: 1294000000, stop_hz: 1296000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1296_1298", start_hz: 1296000000, stop_hz: 1298000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
-  - { name: "23cm_1298_1300", start_hz: 1298000000, stop_hz: 1300000000, modulation: nfm, channel_bw_hz: 12500, group: ham }
+  - { name: "23cm_1240_1242", start_hz: 1240000000, stop_hz: 1242000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1242_1244", start_hz: 1242000000, stop_hz: 1244000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1244_1246", start_hz: 1244000000, stop_hz: 1246000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1246_1248", start_hz: 1246000000, stop_hz: 1248000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1248_1250", start_hz: 1248000000, stop_hz: 1250000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1250_1252", start_hz: 1250000000, stop_hz: 1252000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1252_1254", start_hz: 1252000000, stop_hz: 1254000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1254_1256", start_hz: 1254000000, stop_hz: 1256000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1256_1258", start_hz: 1256000000, stop_hz: 1258000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1258_1260", start_hz: 1258000000, stop_hz: 1260000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1260_1262", start_hz: 1260000000, stop_hz: 1262000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1262_1264", start_hz: 1262000000, stop_hz: 1264000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1264_1266", start_hz: 1264000000, stop_hz: 1266000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1266_1268", start_hz: 1266000000, stop_hz: 1268000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1268_1270", start_hz: 1268000000, stop_hz: 1270000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1270_1272", start_hz: 1270000000, stop_hz: 1272000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1272_1274", start_hz: 1272000000, stop_hz: 1274000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1274_1276", start_hz: 1274000000, stop_hz: 1276000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1276_1278", start_hz: 1276000000, stop_hz: 1278000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1278_1280", start_hz: 1278000000, stop_hz: 1280000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1280_1282", start_hz: 1280000000, stop_hz: 1282000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1282_1284", start_hz: 1282000000, stop_hz: 1284000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1284_1286", start_hz: 1284000000, stop_hz: 1286000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1286_1288", start_hz: 1286000000, stop_hz: 1288000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1288_1290", start_hz: 1288000000, stop_hz: 1290000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1290_1292", start_hz: 1290000000, stop_hz: 1292000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1292_1294", start_hz: 1292000000, stop_hz: 1294000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1294_1296", start_hz: 1294000000, stop_hz: 1296000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1296_1298", start_hz: 1296000000, stop_hz: 1298000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
+  - { name: "23cm_1298_1300", start_hz: 1298000000, stop_hz: 1300000000, modulation: nfm, channel_bw_hz: 12500, group: ham_23cm }
 
   # ========== ATC (AM) — toggle in UI; off by default ==========
   - { name: "atc_118_120", start_hz: 118000000, stop_hz: 120000000, modulation: am, channel_bw_hz: 8000, group: atc }

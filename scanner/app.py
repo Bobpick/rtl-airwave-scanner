@@ -97,7 +97,13 @@ class ScannerApp:
         groups = []
         for g, flag in (
             ("ATC", self.cfg.enable_atc),
-            ("ham", self.cfg.enable_ham),
+            ("10m", self.cfg.enable_ham_10m),
+            ("6m", self.cfg.enable_ham_6m),
+            ("2m", self.cfg.enable_ham_2m),
+            ("1.25m", self.cfg.enable_ham_1p25m),
+            ("70cm", self.cfg.enable_ham_70cm),
+            ("33cm", self.cfg.enable_ham_33cm),
+            ("23cm", self.cfg.enable_ham_23cm),
             ("GMRS", self.cfg.enable_gmrs),
             ("MURS", self.cfg.enable_murs),
             ("marine", self.cfg.enable_marine),
