@@ -1,5 +1,7 @@
 # rtl-airwave-scanner
 
+![rtl-airwave-scanner](repo.png)
+
 Python RTL-SDR scanner for **SIGINT-style** capture:
 
 - Wideband survey + dwell when energy appears
