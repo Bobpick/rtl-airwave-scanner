@@ -80,3 +80,18 @@ MIT (see `LICENSE`).
 ## Legal
 
 Receive only where lawful. Authors are not responsible for misuse.
+
+## Desktop launcher (no terminal)
+
+```bash
+./start-background.sh     # scanner + viewer in background, opens browser
+```
+
+Or search **RTL Airwave Scanner** in your app menu.
+
+- **Shutdown** from the red **Shutdown** button in the web UI (stops scanner + dashboard).
+- Logs: `logs/scanner.log`, `logs/viewer.log`.
+
+### AppImage?
+
+Possible later, but heavy for Python + USB. A `.desktop` launcher is the usual Linux approach.

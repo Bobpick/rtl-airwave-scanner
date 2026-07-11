@@ -17,6 +17,7 @@ from scanner.demod import demodulate
 from scanner.recorder import Transmission, TransmissionLog, utcnow
 from scanner.sdr import RtlSdrSource
 from scanner.spectrum import find_peaks, power_spectrum_db
+from scanner.live_state import write_live_state
 from scanner.squelch import apply_to_config, group_enabled, load_squelch
 
 log = logging.getLogger(__name__)
@@ -55,8 +56,23 @@ class ScannerApp:
         self._learning_done = False
         self._squelch_mtime: float | None = None
         self._last_squelch_check = 0.0
+        self._site_name = "LOCAL"
+        self._mode = "SURVEY"
         # Apply live squelch overrides if file already exists
         self._reload_squelch(force=True)
+        # Optional site name from overlay
+        try:
+            import yaml
+
+            site_path = Path(self.cfg.squelch_file).parent / "site.yaml"
+            if not site_path.is_file():
+                site_path = Path("site.yaml")
+            if site_path.is_file():
+                site = yaml.safe_load(site_path.read_text(encoding="utf-8")) or {}
+                if site.get("site_name"):
+                    self._site_name = str(site["site_name"])[:32]
+        except Exception:
+            pass
 
     def request_stop(self, *_args) -> None:
         log.info("Stop requested…")
@@ -176,6 +192,45 @@ class ScannerApp:
             band_stop_hz=hi,
         )
         peaks = [p for p in peaks if not self._is_ignored(p.frequency_hz)]
+
+        # Feed the dashboard spectrum / waterfall
+        try:
+            self._mode = "DWELL" if any(t.recording for t in self.tracks.values()) else "SURVEY"
+            try:
+                g = self.sdr._sdr.gain
+                gain = float(g) if not isinstance(g, str) else 0.0
+            except Exception:
+                gain = float(self.cfg.gain or 0)
+            plan = [
+                {
+                    "name": b.name,
+                    "group": b.group,
+                    "start_mhz": b.start_hz / 1e6,
+                    "stop_mhz": b.stop_hz / 1e6,
+                    "active": b.name == band.name,
+                }
+                for b in self._active_bands()
+            ]
+            write_live_state(
+                site_name=self._site_name,
+                mode=self._mode,
+                gain=gain,
+                band_name=band.name,
+                group=band.group,
+                center_hz=center,
+                sample_rate=self.sdr.sample_rate,
+                freqs_hz=freqs,
+                power_db=power,
+                peaks=[
+                    {"mhz": p.frequency_hz / 1e6, "snr_db": p.snr_db, "group": band.group}
+                    for p in peaks[:12]
+                ],
+                plan=plan,
+                path=self.cfg.output_dir / "live_state.json",
+            )
+        except Exception:
+            pass
+
         return peaks, iq, center
 
     def _update_spur_learning(self, peaks) -> None:
@@ -484,30 +539,37 @@ class ScannerApp:
 
         looks_without_activity = 0
         hop_after = max(1, self.cfg.hop_after_idle_looks)
+        # Don't pin forever on one window (noise/spurs used to block hops while tracks existed)
+        max_band_dwell_s = float(getattr(self.cfg, "max_band_dwell_seconds", 25.0))
         looks_total = 0
         rate_t0 = time.monotonic()
         cycle_t0 = time.monotonic()
+        band_entered = time.monotonic()
         bands_this_cycle = 0
 
         try:
             while not self._stop:
                 self._reload_squelch()
+                hop_after = max(1, self.cfg.hop_after_idle_looks)
                 now = time.monotonic()
                 peaks, iq, center = self._look(band, center)
                 self._update_spur_learning(peaks)
                 looks_total += 1
 
                 # Channel-equivalent rate: one wideband look covers ~sr/step channels
-                if looks_total % 50 == 0:
+                if looks_total == 1 or (time.monotonic() - rate_t0) >= 5.0:
                     elapsed = max(time.monotonic() - rate_t0, 1e-6)
                     ch_per_look = max(self.cfg.sample_rate_hz / max(self.cfg.channel_step_hz, 1), 1)
                     rate = (looks_total * ch_per_look) / elapsed
+                    active_n = len(self._active_bands())
                     log.info(
-                        "Scan rate ≈ %.0f channel-checks/s  (%.1f looks/s · ~%.0f ch/look)",
+                        "Scan rate ≈ %.0f ch-checks/s · window %s · plan %d bands",
                         rate,
-                        looks_total / elapsed,
-                        ch_per_look,
+                        band.name,
+                        active_n,
                     )
+                    rate_t0 = time.monotonic()
+                    looks_total = 0
 
                 if peaks:
                     looks_without_activity = 0
@@ -522,30 +584,55 @@ class ScannerApp:
 
                 self._update_tracks(band, peaks, iq, center, now)
 
-                # Hop quickly when idle. Re-evaluate enabled groups every hop (UI toggles).
+                # Hop when idle enough. Only *active recordings* block hops (not bare peak tracks).
                 recording = any(t.recording for t in self.tracks.values())
                 active = self._active_bands()
                 if not active:
                     log.warning("All band groups disabled — waiting…")
                     time.sleep(1.0)
                     continue
-                # If current band was turned off (e.g. ATC off), leave immediately
-                must_leave = band not in active and not recording and not self.tracks
-                if (
-                    (len(active) > 1 or must_leave)
-                    and not recording
-                    and not self.tracks
-                    and (looks_without_activity >= hop_after or must_leave)
-                ):
+
+                dwell_s = time.monotonic() - band_entered
+                force_time = dwell_s >= max_band_dwell_s and len(active) > 1
+                group_off = band not in active
+                idle_hop = (
+                    not recording
+                    and looks_without_activity >= hop_after
+                    and len(active) > 1
+                )
+                # Continuous RF noise with no open recording should not pin us forever
+                stuck_tracks = (
+                    not recording
+                    and self.tracks
+                    and dwell_s >= max(8.0, max_band_dwell_s * 0.4)
+                    and len(active) > 1
+                )
+
+                if force_time or group_off or idle_hop or stuck_tracks:
+                    if recording and force_time:
+                        log.info(
+                            "Max dwell %.0fs on %s — finishing clips and hopping",
+                            max_band_dwell_s,
+                            band.name,
+                        )
+                    reason = (
+                        "group_off" if group_off else
+                        "max_dwell" if force_time else
+                        "stuck_tracks" if stuck_tracks else
+                        "idle"
+                    )
                     self._flush_all(band)
+                    self.tracks.clear()
                     prev = band
                     band = self._next_enabled_band(prev if prev in active else None)
                     if band is None:
                         continue
                     center = self._tune_band(band)
+                    band_entered = time.monotonic()
                     looks_without_activity = 0
                     bands_this_cycle += 1
-                    if band == active[0] and prev in active:
+                    active = self._active_bands()
+                    if active and band == active[0] and prev in active:
                         cycle_s = time.monotonic() - cycle_t0
                         log.info(
                             "Full enabled-band cycle in %.2fs (%d windows)",
@@ -554,12 +641,13 @@ class ScannerApp:
                         )
                         cycle_t0 = time.monotonic()
                     log.info(
-                        "Hop → %s [%s] (%.3f–%.3f MHz) %s",
+                        "Hop → %s [%s] (%.3f–%.3f MHz) %s  (%s)",
                         band.name,
                         band.group,
                         band.start_hz / 1e6,
                         band.stop_hz / 1e6,
                         band.modulation,
+                        reason,
                     )
         except KeyboardInterrupt:
             log.info("Interrupted")

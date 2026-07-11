@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import os
+import signal
+import threading
+import time
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, render_template_string, request, send_file
 
 from scanner.config import Config
+from scanner.live_state import read_live_state
 from scanner.recorder import TransmissionLog
-from scanner.squelch import DEFAULTS, LIMITS, apply_to_config, load_squelch, save_squelch
+from scanner.squelch import BOOL_DEFAULTS, DEFAULTS, apply_to_config, load_squelch, save_squelch
 
 PAGE = r"""
 <!doctype html>
@@ -15,185 +20,580 @@ PAGE = r"""
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>Airwave recordings</title>
+  <title>RTL Airwave Scanner</title>
   <style>
     :root {
-      --bg: #0f1419; --panel: #1a2332; --text: #e7ecf3; --muted: #8b9bb4;
-      --acc: #3d9cf0; --ok: #3ecf8e; --bad: #f07178; --line: #2a3548;
+      --bg: #050b13;
+      --panel: #0d1725;
+      --panel: #0d1725;
+      --panel-deep: #09121e;
+      --panel-top: #122033;
+      --text: #dfe8f3;
+      --muted: #91a1b5;
+      --faint: #52657d;
+      --line: #26384b;
+      --line-soft: rgba(93, 126, 158, .20);
+      --blue: #258ce0;
+      --blue-bright: #43b7ff;
+      --green: #38c876;
+      --yellow: #e6b735;
+      --purple: #9878e8;
+      --pink: #e36bb5;
+      --ok: #45d16a;
     }
     * { box-sizing: border-box; }
+    html { background: #03070d; }
     body {
-      margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
-      background: var(--bg); color: var(--text);
+      margin: 0;
+      min-height: 100vh;
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      background:
+        radial-gradient(900px 500px at 0% 0%, rgba(30, 72, 107, .35), transparent 62%),
+        radial-gradient(700px 460px at 100% 0%, rgba(14, 49, 77, .28), transparent 65%),
+        repeating-linear-gradient(115deg, rgba(255,255,255,.018) 0 1px, transparent 1px 90px),
+        #050a11;
     }
-    header {
-      padding: 1rem 1.25rem; border-bottom: 1px solid var(--line);
-      display: flex; flex-wrap: wrap; gap: 1rem; align-items: center;
-      background: linear-gradient(180deg, #152033, var(--bg));
-      position: sticky; top: 0; z-index: 5;
+    .shell {
+      width: min(1400px, calc(100vw - 34px));
+      margin: 14px auto 28px;
     }
-    h1 { font-size: 1.15rem; margin: 0; font-weight: 600; letter-spacing: .02em; }
-    .stats { display: flex; gap: .75rem; flex-wrap: wrap; color: var(--muted); font-size: .9rem; }
-    .stats b { color: var(--text); }
-    .channels {
-      margin: 0 1.25rem .75rem; padding: .65rem 1rem; background: var(--panel);
-      border: 1px solid var(--line); border-radius: 10px; font-size: .85rem;
-      color: var(--muted); display: flex; flex-wrap: wrap; gap: .5rem 1.25rem;
+    .card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid #31465b;
+      border-radius: 17px;
+      background: linear-gradient(180deg, rgba(17, 31, 47, .98), rgba(8, 17, 28, .99));
+      box-shadow:
+        0 0 0 3px rgba(3, 9, 15, .78),
+        0 0 0 5px rgba(34, 53, 69, .42),
+        0 24px 70px rgba(0,0,0,.62),
+        inset 0 1px rgba(255,255,255,.08);
     }
-    .channels strong { color: var(--text); font-weight: 600; }
-    .channels .mhz { color: #9fd0ff; font-weight: 600; }
-    .squelch {
-      margin: 0 1.25rem 1rem; padding: 1rem 1.1rem; background: var(--panel);
-      border: 1px solid var(--line); border-radius: 10px;
+    .topbar {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: .65rem 1.25rem;
+      border-bottom: 1px solid #2a3e52;
+      background: linear-gradient(180deg, rgba(27, 44, 61, .72), rgba(8, 17, 28, .75));
+      box-shadow: inset 0 -1px rgba(0,0,0,.55);
     }
-    .squelch h2 {
-      margin: 0 0 .75rem; font-size: .95rem; font-weight: 600; color: var(--text);
-      display: flex; align-items: center; gap: .75rem; flex-wrap: wrap;
+    .brand {
+      color: #eef5fb;
+      font-size: 1.03rem;
+      font-weight: 700;
+      letter-spacing: .045em;
+      white-space: nowrap;
+      text-shadow: 0 1px 2px #000;
     }
-    .squelch h2 .hint { color: var(--muted); font-weight: 400; font-size: .8rem; }
-    .squelch h2 .saved { color: var(--ok); font-size: .8rem; font-weight: 500; opacity: 0; transition: opacity .2s; }
-    .squelch h2 .saved.show { opacity: 1; }
-    .sliders { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: .85rem 1.5rem; }
-    .slider-row label {
-      display: flex; justify-content: space-between; font-size: .82rem; color: var(--muted); margin-bottom: .25rem;
+    .meta {
+      display: flex;
+      flex: 1;
+      justify-content: flex-end;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: .7rem 1.65rem;
+      color: #aab7c6;
+      font-size: .72rem;
+      letter-spacing: .025em;
+      white-space: nowrap;
     }
-    .slider-row label b { color: var(--text); font-variant-numeric: tabular-nums; }
-    .slider-row input[type=range] {
-      width: 100%; accent-color: var(--acc); cursor: pointer;
+    .meta b { color: #e7edf4; font-weight: 600; }
+    .meta .mode { color: #71d492; }
+    .dot {
+      width: 9px; height: 9px; display: inline-block;
+      margin-left: .42rem; vertical-align: -1px;
+      border-radius: 50%; background: var(--ok);
+      box-shadow: 0 0 9px rgba(69, 209, 106, .9);
     }
-    .slider-row .scale { display: flex; justify-content: space-between; font-size: .7rem; color: var(--muted); margin-top: .1rem; }
-    .controls { display: flex; gap: .5rem; flex-wrap: wrap; margin-left: auto; }
-    select, button, input {
-      background: var(--panel); color: var(--text); border: 1px solid var(--line);
-      border-radius: 8px; padding: .4rem .65rem; font-size: .9rem;
+    .dot.off { background: #ec5d69; box-shadow: 0 0 9px #ec5d69; }
+
+    .body {
+      display: grid;
+      grid-template-columns: 218px minmax(0, 1fr);
+      min-height: 580px;
     }
-    button { cursor: pointer; }
-    button:hover { border-color: var(--acc); }
-    main { padding: 0 1.25rem 3rem; }
-    table { width: 100%; border-collapse: collapse; font-size: .9rem; }
-    th, td { padding: .55rem .5rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
-    th { color: var(--muted); font-weight: 500; position: sticky; top: 64px; background: var(--bg); }
-    tr:hover td { background: #152033; }
-    .mhz { font-variant-numeric: tabular-nums; font-weight: 600; color: #9fd0ff; }
+    @media (max-width: 900px) {
+      .shell { width: calc(100vw - 16px); margin-top: 8px; }
+      .body { grid-template-columns: 1fr; }
+      .sidebar { border-right: 0 !important; border-bottom: 1px solid var(--line); }
+      .meta { justify-content: flex-start; }
+    }
+
+    .sidebar {
+      padding: .9rem .85rem 1rem;
+      border-right: 1px solid #2a3c50;
+      background: linear-gradient(180deg, rgba(8, 18, 29, .96), rgba(5, 13, 22, .99));
+    }
+    .sidebar h3 {
+      margin: 0 0 .64rem;
+      color: #dce6ef;
+      font-size: .68rem;
+      font-weight: 600;
+      letter-spacing: .10em;
+    }
+    .sq-row { margin-bottom: .68rem; }
+    .sq-row label {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: .4rem;
+      margin-bottom: .23rem;
+      color: #d4dee8;
+      font-size: .68rem;
+      line-height: 1.1;
+      white-space: nowrap;
+    }
+    .sq-row label span.range { color: #bcc8d4; }
+    .sq-row label b {
+      color: #edf4fb;
+      font-size: .67rem;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    .sq-row input[type=range] {
+      width: 100%;
+      height: 4px;
+      margin: 0;
+      cursor: pointer;
+      accent-color: var(--blue);
+    }
+    .sq-row input[type=range]::-webkit-slider-runnable-track {
+      height: 3px; border-radius: 4px; background: #405365;
+    }
+    .sq-row input[type=range]::-webkit-slider-thumb {
+      width: 11px; height: 11px; margin-top: -4px;
+      border: 0; border-radius: 50%; background: var(--blue-bright);
+      box-shadow: 0 0 5px rgba(67,183,255,.65);
+      appearance: none;
+    }
+    .sq-row.ham input { accent-color: var(--green); }
+    .sq-row.gmrs input { accent-color: var(--yellow); }
+    .sq-row.marine input { accent-color: var(--purple); }
+    .sq-row.murs input { accent-color: var(--pink); }
+    .saved {
+      height: .8rem;
+      color: #55da7c;
+      font-size: .65rem;
+      opacity: 0;
+      transition: opacity .2s;
+    }
+    .saved.show { opacity: 1; }
+    .groups {
+      margin-top: .42rem;
+      padding-top: .72rem;
+      border-top: 1px solid var(--line-soft);
+    }
+    .groups label {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      margin: .32rem 0;
+      color: #d6e0e9;
+      font-size: .74rem;
+      cursor: pointer;
+    }
+    .groups input {
+      width: 14px; height: 14px; margin: 0;
+      accent-color: var(--blue);
+    }
+    .groups label.visual-only {
+      opacity: .72;
+      cursor: default;
+    }
+    .adv {
+      margin-top: .8rem;
+      padding-top: .65rem;
+      border-top: 1px solid var(--line-soft);
+      color: var(--muted);
+      font-size: .68rem;
+    }
+    .adv summary { cursor: pointer; color: #aab9c8; }
+    .adv select { width: 100%; }
+
+    .main {
+      position: relative;
+      min-width: 0;
+      padding: .75rem .78rem .85rem;
+      background: linear-gradient(180deg, rgba(9, 20, 32, .72), rgba(5, 13, 22, .45));
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: .4rem;
+      margin: 0 0 .25rem;
+      position: static;
+      pointer-events: auto;
+    }
+    .main {
+      min-width: 0; /* allow flex children to shrink without overflow */
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 84px;
+      height: 20px;
+      padding: .12rem .6rem;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 3px;
+      color: #dce8f0;
+      background: rgba(36, 82, 119, .9);
+      box-shadow: inset 0 1px rgba(255,255,255,.12), 0 1px 2px #000;
+      font-size: .67rem;
+      letter-spacing: .025em;
+    }
+    .pill i { display: none; }
+    .pill.atc { background: rgba(30, 104, 162, .86); }
+    .pill.ham { background: rgba(25, 132, 73, .86); }
+    .pill.gmrs { background: rgba(155, 119, 18, .90); }
+    .pill.marine { background: rgba(92, 52, 140, .88); }
+    .pill.murs { background: rgba(130, 50, 104, .88); }
+    .pill.public { background: rgba(155, 72, 48, .88); }
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem .85rem;
+      align-items: baseline;
+      padding: .15rem 0 .35rem;
+      font-size: .72rem;
+      color: #8092a6;
+      line-height: 1.35;
+    }
+    .status-row b { color: #d5e0ec; font-weight: 600; }
+    .status-row .sep { color: #3a4d63; }
+    #plan-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .3rem;
+      max-height: 4.5rem;
+      overflow-y: auto;
+      padding: .15rem 0 .4rem;
+      margin-bottom: .15rem;
+    }
+    #plan-chips .chip {
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid #2a3d52;
+      border-radius: 999px;
+      padding: .12rem .45rem;
+      font-size: .65rem;
+      color: #9aabc0;
+      background: rgba(0,0,0,.2);
+      white-space: nowrap;
+      line-height: 1.2;
+    }
+    #plan-chips .chip.active {
+      color: #eef5ff;
+      font-weight: 700;
+      box-shadow: 0 0 0 1px rgba(61,156,240,.55);
+      background: rgba(61,156,240,.12);
+    }
+
+    .viz {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid #263b50;
+      border-radius: 4px;
+      background: #050c15;
+      box-shadow: inset 0 0 22px rgba(0,0,0,.45), 0 2px 5px rgba(0,0,0,.35);
+    }
+    .spectrum-wrap {
+      position: relative;
+      height: 164px;
+      border-bottom: 1px solid #263b50;
+      background: linear-gradient(180deg, rgba(9,23,37,.96), rgba(3,10,18,.98));
+    }
+    #spectrum { width: 100%; height: 100%; display: block; }
+    .axis-y {
+      position: absolute;
+      z-index: 2;
+      left: 5px; top: 29px; bottom: 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      color: #9baabc;
+      font-size: .62rem;
+      pointer-events: none;
+    }
+    .waterfall-wrap {
+      position: relative;
+      height: 103px;
+      background: #04101b;
+    }
+    #waterfall {
+      width: 100%; height: 100%; display: block;
+      image-rendering: pixelated;
+    }
+    .axis-x {
+      position: absolute;
+      z-index: 3;
+      left: 44px; right: 12px; bottom: 2px;
+      display: flex;
+      justify-content: space-between;
+      padding: 0;
+      color: #aeb9c5;
+      font-size: .61rem;
+      border: 0;
+      pointer-events: none;
+      text-shadow: 0 1px 2px #000;
+    }
+    .axis-x span { white-space: nowrap; }
+
+    .table-wrap {
+      max-height: 320px;
+      margin-top: .62rem;
+      overflow: auto;
+      border: 1px solid #263b50;
+      border-radius: 4px;
+      background: rgba(3, 10, 17, .73);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: .69rem; }
+    th, td {
+      padding: .48rem .55rem;
+      text-align: left;
+      white-space: nowrap;
+      border-bottom: 1px solid rgba(45, 66, 85, .72);
+    }
+    th {
+      position: sticky; top: 0; z-index: 2;
+      color: #aebccc;
+      background: #0b1725;
+      font-size: .62rem;
+      font-weight: 600;
+      letter-spacing: .055em;
+    }
+    td { color: #c4d0dc; }
+    tr:hover td { background: rgba(40, 139, 219, .10); }
     .tag {
-      display: inline-block; padding: .12rem .45rem; border-radius: 999px;
-      font-size: .75rem; font-weight: 600;
+      display: inline-block;
+      min-width: 3.2rem;
+      padding: .12rem .4rem;
+      border-radius: 3px;
+      text-align: center;
+      font-size: .62rem;
+      font-weight: 700;
+      letter-spacing: .04em;
     }
-    .tag.ok { background: rgba(62,207,142,.15); color: var(--ok); }
-    .tag.bad { background: rgba(240,113,120,.15); color: var(--bad); }
-    .muted { color: var(--muted); font-size: .82rem; }
-    audio { width: 180px; height: 32px; vertical-align: middle; }
-    .empty { color: var(--muted); padding: 2rem; text-align: center; }
-    .del { color: var(--bad); border-color: transparent; background: transparent; }
+    .tag.atc { color: #4db9ff; background: rgba(37,140,224,.13); }
+    .tag.ham { color: #55d784; background: rgba(56,200,118,.13); }
+    .tag.gmrs { color: #f1ca54; background: rgba(230,183,53,.13); }
+    .tag.marine { color: #b69bff; background: rgba(152,120,232,.13); }
+    .tag.murs { color: #ee83c3; background: rgba(227,107,181,.13); }
+    .tag.public { color: #ff9f7c; background: rgba(227,107,95,.13); }
+    .tag.other { color: #a9b7c5; background: rgba(148,163,184,.12); }
+    .freq { color: #9bcfff; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .file a { color: #3b90d8; text-decoration: none; }
+    .file a:hover { color: #75c1ff; text-decoration: underline; }
+    .actions { display: flex; align-items: center; justify-content: flex-end; gap: .36rem; }
+    .icon-btn {
+      display: inline-flex;
+      width: 23px; height: 23px;
+      align-items: center; justify-content: center;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 3px;
+      color: #c5d0dc;
+      background: transparent;
+      cursor: pointer;
+      font-size: .82rem;
+      line-height: 1;
+    }
+    .icon-btn:hover { color: #fff; border-color: #3c86b9; background: rgba(48,131,190,.16); }
+    .icon-btn.del { color: #798898; }
+    .icon-btn.del:hover { color: #ff9a9a; border-color: #8f4f5b; }
+    .icon-btn.download { color: #d2dbe4; text-decoration: none; }
+    .icon-btn.play.active { color: #5ddf93; }
+    .empty { color: var(--muted); text-align: center; padding: 1.5rem; }
+    code { color: #86c7fa; }
+    .shutdown-btn {
+      margin-left: .5rem;
+      padding: .35rem .75rem;
+      border-radius: 6px;
+      border: 1px solid #8f4f5b;
+      background: rgba(180, 60, 70, .25);
+      color: #ffb4b4;
+      font-size: .78rem;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: .02em;
+    }
+    .shutdown-btn:hover {
+      background: rgba(200, 70, 80, .4);
+      color: #fff;
+      border-color: #c06070;
+    }
+    .shutdown-msg {
+      min-height: 60vh; display: flex; align-items: center; justify-content: center;
+      flex-direction: column; gap: .75rem; color: var(--muted); text-align: center;
+      padding: 2rem;
+    }
+    .shutdown-msg h1 { color: var(--text); font-size: 1.25rem; margin: 0; }
   </style>
 </head>
 <body>
-  <header>
-    <h1>Airwave scanner</h1>
-    <div class="stats" id="stats">Loading…</div>
-    <div class="controls">
-      <select id="quality">
-        <option value="accepted">Accepted only</option>
-        <option value="">All (incl. rejected)</option>
-        <option value="rejected">Rejected only</option>
-      </select>
-      <select id="band"><option value="">All bands</option></select>
-      <button id="refresh">Refresh</button>
-      <button id="purge" title="Delete all rejected rows">Purge rejected</button>
-    </div>
-  </header>
+  <div class="shell">
+    <div class="card">
+      <div class="topbar">
+        <div class="brand">RTL Airwave Scanner</div>
+        <div class="meta">
+          <span>SITE: <b id="site">—</b></span>
+          <span>MODE: <b class="mode" id="mode">—</b></span>
+          <span>GAIN: <b id="gain">—</b></span>
+          <span>UTC: <b id="utc">—</b><span class="dot" id="live-dot" title="live feed"></span></span>
+          <button type="button" class="shutdown-btn" id="shutdown" title="Stop scanner and dashboard">Shutdown</button>
+        </div>
+      </div>
 
-  <div class="squelch">
-    <h2>
-      Band groups
-      <span class="hint">Toggle live — ATC off by default so ham/GMRS get airtime</span>
-      <span class="saved" id="bg-saved">saved</span>
-    </h2>
-    <div class="toggles" id="band-toggles" style="display:flex;flex-wrap:wrap;gap:.75rem 1.25rem;margin-bottom:1rem;">
-      <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.9rem;">
-        <input type="checkbox" id="enable_atc"/> <strong>ATC</strong> <span class="muted">airband voice</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.9rem;">
-        <input type="checkbox" id="enable_ham" checked/> <strong>Ham</strong> <span class="muted">2m / 70cm / repeater</span>
-      </label>
-      <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.9rem;">
-        <input type="checkbox" id="enable_gmrs" checked/> <strong>GMRS/FRS</strong>
-      </label>
-      <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.9rem;">
-        <input type="checkbox" id="enable_murs" checked/> <strong>MURS</strong>
-      </label>
-      <label style="display:flex;align-items:center;gap:.4rem;cursor:pointer;font-size:.9rem;">
-        <input type="checkbox" id="enable_marine" checked/> <strong>Marine</strong>
-      </label>
-    </div>
-    <h2>
-      Squelch
-      <span class="hint">Higher = less static, fewer clips · applies live to running scanner</span>
-      <span class="saved" id="sq-saved">saved</span>
-    </h2>
-    <div class="sliders">
-      <div class="slider-row">
-        <label>RF SNR threshold <b id="v-snr">12.0</b> dB</label>
-        <input type="range" id="snr_threshold_db" min="4" max="35" step="0.5" value="12"/>
-        <div class="scale"><span>open 4</span><span>tight 35</span></div>
-      </div>
-      <div class="slider-row">
-        <label>Min voice score <b id="v-voice">0.25</b> <span class="muted">(≤0.30 = loose / save more)</span></label>
-        <input type="range" id="min_voice_score" min="0.10" max="0.95" step="0.01" value="0.25"/>
-        <div class="scale"><span>open 0.10</span><span>tight 0.95</span></div>
-      </div>
-      <div class="slider-row">
-        <label>Min activity <b id="v-act">4</b>%</label>
-        <input type="range" id="min_activity_ratio" min="0.01" max="0.50" step="0.01" value="0.04"/>
-        <div class="scale"><span>open 1%</span><span>tight 50%</span></div>
-      </div>
-      <div class="slider-row">
-        <label>Min dynamic range <b id="v-dyn">4.0</b> dB</label>
-        <input type="range" id="min_dynamic_range_db" min="1" max="20" step="0.5" value="4"/>
-        <div class="scale"><span>open 1</span><span>tight 20</span></div>
+      <div class="body">
+        <aside class="sidebar">
+          <h3>WHICH BANDS TO SCAN</h3>
+          <p style="margin:0 0 .75rem;font-size:.72rem;color:var(--muted);line-height:1.35;">
+            One RTL-SDR = one ~2&nbsp;MHz window at a time. Checked groups are
+            <b style="color:var(--text)">hopped in rotation</b> (not all at once).
+          </p>
+          <div class="groups" style="margin-top:0;">
+            <label><input type="checkbox" id="enable_atc"/> ATC <span class="muted">(118–137 AM)</span></label>
+            <label><input type="checkbox" id="enable_ham" checked/> HAM <span class="muted">(2m / 70cm / …)</span></label>
+            <label><input type="checkbox" id="enable_gmrs" checked/> GMRS/FRS <span class="muted">(462 / 467)</span></label>
+            <label><input type="checkbox" id="enable_marine" checked/> MARINE <span class="muted">(156–162)</span></label>
+            <label><input type="checkbox" id="enable_murs" checked/> MURS <span class="muted">(151–155)</span></label>
+          </div>
+          <div class="saved" id="bg-saved">saved</div>
+
+          <h3 style="margin-top:1.25rem;">RECORDING THRESHOLDS</h3>
+          <p style="margin:0 0 .65rem;font-size:.72rem;color:var(--muted);line-height:1.35;">
+            Global for all bands. Higher = fewer clips / less static.
+          </p>
+          <div class="sq-row atc">
+            <label><span class="range">RF SNR (min dB above noise)</span><b id="v-snr">12.0</b></label>
+            <input type="range" id="snr_threshold_db" min="4" max="35" step="0.5" value="12"/>
+          </div>
+          <div class="sq-row ham">
+            <label><span class="range">Voice score (≤0.30 = looser)</span><b id="v-voice">0.25</b></label>
+            <input type="range" id="min_voice_score" min="0.10" max="0.95" step="0.01" value="0.25"/>
+          </div>
+          <div class="sq-row gmrs">
+            <label><span class="range">Min activity %</span><b id="v-act">4</b>%</label>
+            <input type="range" id="min_activity_ratio" min="0.01" max="0.50" step="0.01" value="0.04"/>
+          </div>
+          <div class="sq-row marine">
+            <label><span class="range">Min dynamic range dB</span><b id="v-dyn">4.0</b></label>
+            <input type="range" id="min_dynamic_range_db" min="1" max="20" step="0.5" value="4"/>
+          </div>
+          <div class="saved" id="sq-saved">saved</div>
+
+          <details class="adv">
+            <summary>Advanced / filters</summary>
+            <div style="margin-top:.5rem;display:flex;flex-direction:column;gap:.4rem;">
+              <select id="quality" style="background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:.35rem;">
+                <option value="accepted">Accepted only</option>
+                <option value="">All</option>
+                <option value="rejected">Rejected only</option>
+              </select>
+              <button id="purge" class="icon-btn" style="width:auto;padding:0 .6rem;height:30px;">Purge rejected</button>
+            </div>
+          </details>
+        </aside>
+
+        <section class="main">
+          <div class="legend">
+            <span class="pill atc">ATC</span>
+            <span class="pill ham">HAM</span>
+            <span class="pill gmrs">GMRS</span>
+            <span class="pill marine">MARINE</span>
+            <span class="pill murs">MURS</span>
+          </div>
+          <div class="status-row">
+            <span>Now: <b id="band-line">—</b></span>
+            <span class="sep">·</span>
+            <span>Plan: <b id="plan-count">—</b></span>
+          </div>
+          <div id="plan-chips"></div>
+
+          <div class="viz">
+            <div class="spectrum-wrap">
+              <div class="axis-y"><span>0</span><span>-20</span><span>-40</span><span>-60</span><span>-80</span><span>-100</span></div>
+              <canvas id="spectrum"></canvas>
+              <div class="axis-x" id="axis-x"><span>0 MHz</span><span>500 MHz</span><span>1.0 GHz</span></div>
+            </div>
+            <div class="waterfall-wrap">
+              <canvas id="waterfall"></canvas>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>TIME (UTC)</th>
+                  <th>FREQUENCY</th>
+                  <th>BAND</th>
+                  <th>SNR (dB)</th>
+                  <th>DURATION</th>
+                  <th>FILE</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="rows">
+                <tr><td colspan="7" class="empty">Loading…</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </div>
   </div>
 
-  <div class="channels" id="channels">Loading channels…</div>
-  <main>
-    <table>
-      <thead>
-        <tr>
-          <th>When (UTC)</th>
-          <th>Freq / channel</th>
-          <th>Band</th>
-          <th>Mod</th>
-          <th>Dur</th>
-          <th>SNR</th>
-          <th>Voice</th>
-          <th>Quality</th>
-          <th>Play</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="rows"><tr><td colspan="10" class="empty">Loading…</td></tr></tbody>
-    </table>
-  </main>
   <script>
     const $ = (id) => document.getElementById(id);
     let saveTimer = null;
+    const wfRows = 80;
+    let wf = null; // ImageData buffer rows
+
+    const GROUP_COLOR = {
+      atc: '#2e9ce7', ham: '#39c97a', gmrs: '#e5b733',
+      marine: '#9b79e7', murs: '#df6caf', public: '#e27a59',
+      other: '#8ea1b5'
+    };
+
+    let activeAudio = null;
+    let activePlayButton = null;
 
     function fmtTime(iso) {
       if (!iso) return '—';
-      const d = new Date(iso);
-      return d.toISOString().replace('T', ' ').replace(/\.\d+Z$/, 'Z');
+      try {
+        return new Date(iso).toISOString().replace('T',' ').replace(/\.\d+Z$/,'Z');
+      } catch { return iso; }
     }
     function fmtDur(s) {
       s = Number(s) || 0;
-      if (s < 60) return s.toFixed(1) + 's';
-      return Math.floor(s/60) + 'm ' + (s%60).toFixed(0) + 's';
+      const m = Math.floor(s/60), sec = Math.round(s%60);
+      return String(m).padStart(2,'0') + ':' + String(sec).padStart(2,'0');
+    }
+    function groupOf(bandName, notes) {
+      const n = ((bandName || '') + ' ' + (notes || '')).toLowerCase();
+      if (n.includes('public') || n.includes('safety') || n.includes('police') || n.includes('fire')) return 'public';
+      if (n.startsWith('atc') || n.includes('air') || n.includes('aviation')) return 'atc';
+      if (n.startsWith('gmrs') || n.startsWith('frs')) return 'gmrs';
+      if (n.startsWith('marine') || n.includes('vhf marine')) return 'marine';
+      if (n.startsWith('murs')) return 'murs';
+      if (n.startsWith('2m') || n.startsWith('70cm') || n.startsWith('1.25') || n.includes('kd6') || n.includes('ham')) return 'ham';
+      return 'other';
+    }
+
+    function groupLabel(group) {
+      return group === 'public' ? 'PUBLIC SAFETY' : group.toUpperCase();
     }
 
     function updateLabels() {
       $('v-snr').textContent = Number($('snr_threshold_db').value).toFixed(1);
       $('v-voice').textContent = Number($('min_voice_score').value).toFixed(2);
-      $('v-act').textContent = Math.round(Number($('min_activity_ratio').value) * 100);
+      $('v-act').textContent = Math.round(Number($('min_activity_ratio').value)*100);
       $('v-dyn').textContent = Number($('min_dynamic_range_db').value).toFixed(1);
     }
 
@@ -226,20 +626,18 @@ PAGE = r"""
       };
       await fetch('/api/squelch', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {'Content-Type':'application/json'},
         body: JSON.stringify(body),
       });
       const el = $(fromBands ? 'bg-saved' : 'sq-saved');
       el.classList.add('show');
-      setTimeout(() => el.classList.remove('show'), 1200);
+      setTimeout(() => el.classList.remove('show'), 1000);
     }
-
     function scheduleSave() {
       updateLabels();
       clearTimeout(saveTimer);
-      saveTimer = setTimeout(() => saveSquelch(false), 200);
+      saveTimer = setTimeout(() => saveSquelch(false), 180);
     }
-
     ['snr_threshold_db','min_voice_score','min_activity_ratio','min_dynamic_range_db'].forEach(id => {
       $(id).addEventListener('input', scheduleSave);
     });
@@ -247,104 +645,296 @@ PAGE = r"""
       $(id).addEventListener('change', () => saveSquelch(true));
     });
 
-    async function loadStats() {
-      const s = await (await fetch('/api/stats')).json();
-      $('stats').innerHTML = `
-        <span>Total <b>${s.total}</b></span>
-        <span>Accepted <b style="color:var(--ok)">${s.accepted}</b></span>
-        <span>Rejected <b style="color:var(--bad)">${s.rejected}</b></span>
-      `;
-      const bandSel = $('band');
-      const cur = bandSel.value;
-      bandSel.innerHTML = '<option value="">All bands</option>';
-      (s.bands || []).forEach(b => {
-        if (!b.name) return;
-        const o = document.createElement('option');
-        o.value = b.name; o.textContent = `${b.name} (${b.count})`;
-        bandSel.appendChild(o);
+    function drawSpectrum(state) {
+      const canvas = $('spectrum');
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w || !h) return;
+      if (canvas.width !== Math.floor(w*dpr) || canvas.height !== Math.floor(h*dpr)) {
+        canvas.width = Math.floor(w*dpr); canvas.height = Math.floor(h*dpr);
+      }
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, w, h);
+
+      const left = 30, right = 8, top = 25, bottom = 22;
+      const plotW = Math.max(1, w - left - right);
+      const plotH = Math.max(1, h - top - bottom);
+
+      // Fine grid matching the instrument-panel look in the reference image.
+      ctx.strokeStyle = 'rgba(128, 163, 191, .16)';
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 5; i++) {
+        const y = top + plotH * i / 5 + .5;
+        ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(w - right, y); ctx.stroke();
+      }
+      const freqs = state && state.freqs_mhz ? state.freqs_mhz : [];
+      for (let i = 0; i <= 10; i++) {
+        const x = left + plotW * i / 10 + .5;
+        ctx.strokeStyle = 'rgba(128, 163, 191, .10)';
+        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, h - bottom); ctx.stroke();
+      }
+
+      const power = state && Array.isArray(state.power_db) ? state.power_db : [];
+      const n = power.length;
+      if (!n) {
+        ctx.fillStyle = 'rgba(139,155,180,.58)';
+        ctx.font = '12px system-ui';
+        ctx.fillText('Waiting for scanner spectrum… start ./run.sh', left + 10, top + plotH / 2);
+        return;
+      }
+
+      const mapY = (db) => {
+        const t = Math.max(-100, Math.min(0, Number(db) || -100));
+        return top + (1 - (t + 100) / 100) * plotH;
+      };
+      const mapX = (i) => left + (n < 2 ? .5 : i / (n - 1)) * plotW;
+      const col = GROUP_COLOR[(state.group || 'other').toLowerCase()] || GROUP_COLOR.other;
+
+      // Filled blue noise floor and luminous trace.
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = mapX(i), y = mapY(power[i]);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.lineTo(w - right, h - bottom); ctx.lineTo(left, h - bottom); ctx.closePath();
+      const fill = ctx.createLinearGradient(0, top, 0, h - bottom);
+      fill.addColorStop(0, 'rgba(27, 143, 235, .42)');
+      fill.addColorStop(.7, 'rgba(13, 82, 150, .16)');
+      fill.addColorStop(1, 'rgba(0, 20, 42, 0)');
+      ctx.fillStyle = fill; ctx.fill();
+
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) {
+        const x = mapX(i), y = mapY(power[i]);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.strokeStyle = '#1993ee';
+      ctx.lineWidth = 1.25;
+      ctx.shadowColor = 'rgba(22, 141, 241, .75)';
+      ctx.shadowBlur = 3;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+
+      // Mark detected carriers with a colored vertical beam.
+      (state.peaks || []).forEach((p, index) => {
+        if (freqs.length < 2 || p.mhz < freqs[0] || p.mhz > freqs[freqs.length - 1]) return;
+        const x = left + ((p.mhz - freqs[0]) / (freqs[freqs.length - 1] - freqs[0])) * plotW;
+        ctx.strokeStyle = index % 3 === 0 ? col : 'rgba(32, 145, 232, .60)';
+        ctx.lineWidth = index % 3 === 0 ? 1.2 : .7;
+        ctx.shadowColor = ctx.strokeStyle;
+        ctx.shadowBlur = 5;
+        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, h - bottom); ctx.stroke();
+        ctx.shadowBlur = 0;
       });
-      bandSel.value = cur;
     }
 
-    async function loadChannels() {
-      const ch = await (await fetch('/api/channels')).json();
-      const el = $('channels');
-      if (!ch.length) { el.textContent = 'Ham / GMRS / MURS labels from config.'; return; }
-      el.innerHTML = ch.map(c =>
-        `<span><span class="mhz">${c.frequency_mhz.toFixed(3)}</span> <strong>${c.name}</strong></span>`
-      ).join('');
+    function pushWaterfall(state) {
+      const canvas = $('waterfall');
+      const dpr = window.devicePixelRatio || 1;
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      if (!w || !h) return;
+      if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        wf = null;
+      }
+      const ctx = canvas.getContext('2d');
+      const cw = canvas.width, ch = canvas.height;
+      ctx.imageSmoothingEnabled = false;
+      if (!wf) wf = ctx.createImageData(cw, ch);
+
+      // Move the previous waterfall down one physical pixel row.
+      wf.data.copyWithin(cw * 4, 0);
+      const power = state && Array.isArray(state.power_db) ? state.power_db : [];
+      const row = new Uint8ClampedArray(cw * 4);
+      for (let x = 0; x < cw; x++) {
+        const i = power.length ? Math.floor(x / cw * Math.max(power.length - 1, 0)) : 0;
+        const db = power.length ? Number(power[i]) : -100;
+        const t = Math.max(0, Math.min(1, (db + 100) / 100));
+        // Blue-to-cyan-to-yellow heat map, like a real SDR waterfall.
+        let r, g, b;
+        if (t < .25) {
+          const q = t / .25; r = 3; g = 12 + 40 * q; b = 38 + 100 * q;
+        } else if (t < .55) {
+          const q = (t - .25) / .30; r = 4 + 20 * q; g = 52 + 112 * q; b = 138 + 55 * q;
+        } else if (t < .78) {
+          const q = (t - .55) / .23; r = 24 + 190 * q; g = 164 + 50 * q; b = 185 - 125 * q;
+        } else {
+          const q = (t - .78) / .22; r = 214 + 41 * q; g = 214 - 120 * q; b = 60 - 45 * q;
+        }
+        const k = x * 4;
+        row[k] = Math.round(r); row[k + 1] = Math.round(g);
+        row[k + 2] = Math.round(b); row[k + 3] = 255;
+      }
+      wf.data.set(row, 0);
+      ctx.putImageData(wf, 0, 0);
+    }
+
+    function updateAxis(state) {
+      const el = $('axis-x');
+      if (!state || !state.freqs_mhz || state.freqs_mhz.length < 2) {
+        el.innerHTML = '<span>0 MHz</span><span>500 MHz</span><span>1.0 GHz</span>';
+        return;
+      }
+      const f0 = Number(state.freqs_mhz[0]);
+      const f1 = Number(state.freqs_mhz[state.freqs_mhz.length - 1]);
+      const mid = (f0 + f1) / 2;
+      const format = (f) => f >= 1000 ? (f / 1000).toFixed(1) + ' GHz' : Math.round(f) + ' MHz';
+      el.innerHTML = `<span>${format(f0)}</span><span>${format(mid)}</span><span>${format(f1)}</span>`;
+    }
+
+    async function loadLive() {
+      try {
+        const r = await fetch('/api/live', {cache: 'no-store'});
+        if (!r.ok || r.status === 204) {
+          $('live-dot').classList.add('off');
+          drawSpectrum(null);
+          return;
+        }
+        const s = await r.json();
+        if (!s || !s.ts) {
+          $('live-dot').classList.add('off');
+          drawSpectrum(null);
+          return;
+        }
+        const age = Date.now() / 1000 - Number(s.ts);
+        $('live-dot').classList.toggle('off', age > 8);
+        $('site').textContent = s.site || 'LOCAL';
+        $('mode').textContent = s.mode || '—';
+        $('gain').textContent = (s.gain_db != null ? Number(s.gain_db).toFixed(1) + ' dB' : '—');
+        $('utc').textContent = s.utc || '—';
+        const span = Number(s.span_mhz || 2);
+        const g = String(s.group || '').toUpperCase();
+        $('band-line').textContent =
+          `${s.band || '—'}  (${g || '—'})  ` +
+          `${Number(s.center_mhz || 0).toFixed(3)} MHz · plot ±${(span/2).toFixed(2)} MHz`;
+        const plan = s.plan || [];
+        const pc = $('plan-count');
+        if (pc) {
+          pc.textContent = plan.length
+            ? `${plan.length} windows (hopping; plot = current only)`
+            : '—';
+        }
+        const chips = $('plan-chips');
+        if (chips) {
+          chips.innerHTML = plan.map(p => {
+            const col = GROUP_COLOR[(p.group||'').toLowerCase()] || '#94a3b8';
+            const cls = p.active ? 'chip active' : 'chip';
+            const label = `${p.name}`;
+            return `<span class="${cls}" style="border-left:3px solid ${col}" title="${Number(p.start_mhz).toFixed(1)}–${Number(p.stop_mhz).toFixed(1)} MHz">${label}</span>`;
+          }).join('');
+        }
+        drawSpectrum(s);
+        pushWaterfall(s);
+        updateAxis(s);
+      } catch (err) {
+        $('live-dot').classList.add('off');
+        drawSpectrum(null);
+      }
     }
 
     async function loadRows() {
-      const q = $('quality').value;
-      const band = $('band').value;
-      const params = new URLSearchParams({ limit: '300' });
-      if (q) params.set('quality', q);
-      if (band) params.set('band', band);
-      const rows = await (await fetch('/api/transmissions?' + params)).json();
-      const tbody = $('rows');
-      if (!rows.length) {
-        tbody.innerHTML = '<tr><td colspan="10" class="empty">No transmissions yet. Run <code>./run.sh</code>.</td></tr>';
-        return;
-      }
-      tbody.innerHTML = rows.map(r => {
-        const qtag = (r.quality === 'rejected')
-          ? `<span class="tag bad">rejected</span><div class="muted">${r.quality_reason || ''}</div>`
-          : `<span class="tag ok">accepted</span>`;
-        const audio = r.audio_file
-          ? `<audio controls preload="none" src="/audio/${r.id}"></audio>`
-          : '<span class="muted">—</span>';
-        const channel = r.notes
-          ? `<div class="muted" style="max-width:16rem">${r.notes}</div>`
-          : '';
-        return `<tr>
-          <td>
-            <div>${fmtTime(r.start_utc)}</div>
-            <div class="muted">→ ${fmtTime(r.end_utc)}</div>
-          </td>
-          <td>
-            <div class="mhz">${(r.frequency_mhz || 0).toFixed(4)} <span class="muted">MHz</span></div>
-            ${channel}
-          </td>
-          <td>${r.band_name || '—'}</td>
-          <td>${(r.modulation || '').toUpperCase()}</td>
-          <td>${fmtDur(r.duration_seconds)}</td>
-          <td>
-            <div>${(r.peak_snr_db ?? 0).toFixed(1)} dB</div>
-            <div class="muted">avg ${(r.mean_snr_db ?? r.peak_snr_db ?? 0).toFixed(1)}</div>
-          </td>
-          <td>
-            <div>${(r.voice_score ?? 0).toFixed(2)}</div>
-            <div class="muted">act ${((r.activity_ratio ?? 0)*100).toFixed(0)}% · dyn ${(r.dynamic_range_db ?? 0).toFixed(1)} dB</div>
-          </td>
-          <td>${qtag}</td>
-          <td>${audio}</td>
-          <td><button class="del" data-id="${r.id}" title="Delete">✕</button></td>
-        </tr>`;
-      }).join('');
+      try {
+        const q = $('quality').value;
+        const params = new URLSearchParams({limit: '200'});
+        if (q) params.set('quality', q);
+        const response = await fetch('/api/transmissions?' + params, {cache: 'no-store'});
+        const rows = await response.json();
+        const tbody = $('rows');
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="7" class="empty">No recordings yet — run <code>./run.sh</code> and enable band groups.</td></tr>';
+          return;
+        }
+        tbody.innerHTML = rows.map(r => {
+          const g = groupOf(r.band_name, r.notes);
+          const fname = (r.audio_file || '').split('/').pop() || '—';
+          const play = r.audio_file
+            ? `<button class="icon-btn play" data-src="/audio/${r.id}" title="Play recording">▶</button>
+               <a class="icon-btn download" title="Download" href="/audio/${r.id}" download="${fname}">⇩</a>`
+            : '—';
+          return `<tr>
+            <td>${fmtTime(r.start_utc)}</td>
+            <td class="freq">${Number(r.frequency_mhz || 0).toFixed(4)} MHz</td>
+            <td><span class="tag ${g}">${groupLabel(g)}</span></td>
+            <td>${Number(r.peak_snr_db ?? 0).toFixed(1)}</td>
+            <td>${fmtDur(r.duration_seconds)}</td>
+            <td class="file">${r.audio_file ? `<a href="/audio/${r.id}" download="${fname}">${fname}</a>` : '—'}</td>
+            <td class="actions">${play}
+              <button class="icon-btn del" data-id="${r.id}" title="Delete">✕</button>
+            </td>
+          </tr>`;
+        }).join('');
 
-      tbody.querySelectorAll('.del').forEach(btn => {
-        btn.onclick = async () => {
-          if (!confirm('Delete this entry and its audio file?')) return;
-          await fetch('/api/transmissions/' + btn.dataset.id, { method: 'DELETE' });
-          loadStats(); loadRows();
-        };
-      });
+        tbody.querySelectorAll('.play').forEach(btn => {
+          btn.onclick = () => {
+            if (activeAudio && activePlayButton === btn) {
+              activeAudio.pause();
+              activeAudio.currentTime = 0;
+              btn.textContent = '▶';
+              btn.classList.remove('active');
+              activeAudio = null;
+              activePlayButton = null;
+              return;
+            }
+            if (activeAudio) activeAudio.pause();
+            if (activePlayButton) {
+              activePlayButton.textContent = '▶';
+              activePlayButton.classList.remove('active');
+            }
+            activeAudio = new Audio(btn.dataset.src);
+            activePlayButton = btn;
+            btn.textContent = '■';
+            btn.classList.add('active');
+            activeAudio.onended = () => {
+              btn.textContent = '▶';
+              btn.classList.remove('active');
+              activeAudio = null;
+              activePlayButton = null;
+            };
+            activeAudio.play().catch(() => {
+              btn.textContent = '▶';
+              btn.classList.remove('active');
+            });
+          };
+        });
+        tbody.querySelectorAll('.del').forEach(btn => {
+          btn.onclick = async () => {
+            if (!confirm('Delete this recording?')) return;
+            await fetch('/api/transmissions/' + btn.dataset.id, {method: 'DELETE'});
+            loadRows();
+          };
+        });
+      } catch (err) {
+        // Keep the existing table visible during a short database/API restart.
+      }
     }
 
-    async function refresh() { await loadStats(); await loadRows(); }
-    $('refresh').onclick = refresh;
     $('quality').onchange = loadRows;
-    $('band').onchange = loadRows;
     $('purge').onclick = async () => {
-      if (!confirm('Delete all rejected transmissions (and their audio)?')) return;
-      await fetch('/api/purge_rejected', { method: 'POST' });
-      refresh();
+      if (!confirm('Delete all rejected transmissions?')) return;
+      await fetch('/api/purge_rejected', {method:'POST'});
+      loadRows();
     };
+    $('shutdown').onclick = async () => {
+      if (!confirm('Stop the scanner and close the dashboard?\n\n(The USB dongle will be released.)')) return;
+      try {
+        await fetch('/api/shutdown', {method: 'POST'});
+      } catch (e) { /* server may die before response */ }
+      document.body.innerHTML =
+        '<div class="shutdown-msg">' +
+        '<h1>RTL Airwave Scanner stopped</h1>' +
+        '<p>Scanner and dashboard are shut down. You can close this tab.</p>' +
+        '<p style="font-size:.85rem">Start again from the app menu or <code>./start-background.sh</code></p>' +
+        '</div>';
+    };
+
     loadSquelch();
-    loadChannels();
-    refresh();
-    setInterval(refresh, 15000);
+    loadLive();
+    loadRows();
+    setInterval(loadLive, 400);
+    setInterval(loadRows, 8000);
+    window.addEventListener('resize', () => loadLive());
   </script>
 </body>
 </html>
@@ -356,10 +946,11 @@ def create_app(cfg: Config) -> Flask:
     app = Flask(__name__)
     root = Path.cwd()
     squelch_path = Path(cfg.squelch_file)
+    live_path = Path(cfg.output_dir) / "live_state.json"
 
-    # Seed squelch file from config defaults if missing
     if not squelch_path.is_file():
         seed = dict(DEFAULTS)
+        seed.update(BOOL_DEFAULTS)
         seed["snr_threshold_db"] = cfg.snr_threshold_db
         seed["min_voice_score"] = cfg.min_voice_score
         seed["min_activity_ratio"] = cfg.min_activity_ratio
@@ -372,14 +963,19 @@ def create_app(cfg: Config) -> Flask:
     def index():
         return render_template_string(PAGE)
 
+    @app.get("/api/live")
+    def api_live():
+        state = read_live_state(live_path)
+        if not state:
+            return jsonify({}), 204
+        return jsonify(state)
+
     @app.get("/api/squelch")
     def api_squelch_get():
         return jsonify(load_squelch(squelch_path))
 
     @app.post("/api/squelch")
     def api_squelch_set():
-        from scanner.squelch import BOOL_DEFAULTS
-
         body = request.get_json(force=True, silent=True) or {}
         current = load_squelch(squelch_path)
         current.update({k: body[k] for k in DEFAULTS if k in body})
@@ -387,10 +983,6 @@ def create_app(cfg: Config) -> Flask:
         saved = save_squelch(current, squelch_path)
         apply_to_config(cfg, saved)
         return jsonify(saved)
-
-    @app.get("/api/squelch/limits")
-    def api_squelch_limits():
-        return jsonify({k: {"min": v[0], "max": v[1]} for k, v in LIMITS.items()})
 
     @app.get("/api/channels")
     def api_channels():
@@ -442,6 +1034,81 @@ def create_app(cfg: Config) -> Flask:
                 n += 1
         return jsonify({"deleted": n})
 
+    @app.post("/api/shutdown")
+    def api_shutdown():
+        """Stop scanner process(es) and then this viewer (releases USB dongle)."""
+        project = str(root.resolve())
+        viewer_pid = os.getpid()
+
+        def _shutdown():
+            time.sleep(0.35)
+            # Stop scanner workers first (not this viewer)
+            try:
+                import subprocess
+
+                out = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
+                for line in out.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    parts = line.split(None, 1)
+                    if len(parts) < 2:
+                        continue
+                    pid_s, args = parts[0], parts[1]
+                    try:
+                        pid = int(pid_s)
+                    except ValueError:
+                        continue
+                    if pid == viewer_pid:
+                        continue
+                    if "python" not in args or "-m scanner" not in args:
+                        continue
+                    if "scanner.viewer" in args:
+                        continue
+                    # Prefer processes for this project path when visible
+                    if project not in args and "rtl-airwave-scanner" not in args and "-m scanner" not in args:
+                        continue
+                    try:
+                        os.kill(pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                time.sleep(0.5)
+                # Force-kill stubborn scanners
+                out = subprocess.check_output(["ps", "-eo", "pid=,args="], text=True)
+                for line in out.splitlines():
+                    line = line.strip()
+                    parts = line.split(None, 1)
+                    if len(parts) < 2:
+                        continue
+                    try:
+                        pid = int(parts[0])
+                    except ValueError:
+                        continue
+                    args = parts[1]
+                    if pid == viewer_pid:
+                        continue
+                    if "python" in args and "-m scanner" in args and "scanner.viewer" not in args:
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+            except Exception:
+                pass
+            # Clear pid files if present
+            for name in ("scanner.pid", "viewer.pid"):
+                try:
+                    (root / "logs" / name).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            # Stop this Flask process
+            try:
+                os.kill(viewer_pid, signal.SIGTERM)
+            except Exception:
+                os._exit(0)
+
+        threading.Thread(target=_shutdown, daemon=True).start()
+        return jsonify({"ok": True, "message": "Shutting down scanner and viewer"})
+
     @app.get("/audio/<int:tx_id>")
     def audio(tx_id: int):
         row = log.get(tx_id)
@@ -488,3 +1155,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

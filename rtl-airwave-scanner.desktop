@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=RTL Airwave Scanner
+GenericName=SDR Scanner
+Comment=Scan ham/GMRS/ATC bands, record audio, open the web dashboard
+Exec=/home/bob/rtl-airwave-scanner/start-background.sh
+Path=/home/bob/rtl-airwave-scanner
+Icon=/home/bob/rtl-airwave-scanner/icons/rtl-airwave-scanner.png
+Terminal=false
+Categories=HamRadio;Science;Network;AudioVideo;
+Keywords=SDR;RTL;radio;scanner;GMRS;ham;
+StartupNotify=true
