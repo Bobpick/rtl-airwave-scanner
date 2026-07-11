@@ -73,33 +73,87 @@ An RTL-SDR look is only **~2 MHz** wide at 2.048 Msps. Scanning “everything”
 
 **12 m (24.89–24.99 MHz)** is below most R820T sticks — not scanned.
 
-## Multi-dongle (#5)
+## Multi-dongle and multi-threading
 
-One process can drive **multiple RTL-SDRs** in parallel, each hopping its own band-group pool (faster revisit on voice nets + ATC at once).
+A single scanner process can use **one or more** RTL-SDR sticks. More sticks mean **shorter revisit time** (e.g. 2 m/GMRS on one radio while ATC hops on another).
 
-```bash
-# See serial numbers (do this after plugging the second stick)
-.venv/bin/python -m scanner --list-devices
-```
+### How threading works
 
-In `config.yaml`:
+| Thread | Role |
+|--------|------|
+| **Main** | Starts workers, handles SIGINT/SIGTERM, process lock |
+| **Radio worker** (one per dongle) | Hop schedule, FFT/peaks, RF arming, demod, finalize clips |
+| **IQ reader** (one per dongle) | Continuous USB sample ingest so DSP never starves librtlsdr |
 
-```yaml
-device:
-  gain: 40.2
-  radios:
-    - label: voice
-      serial: null                 # or explicit serial from --list-devices
-      groups: [ham_2m, ham_70cm, gmrs, murs, marine, ham_1p25m]
-    - label: atc
-      serial: "00000002"
-      groups: [atc, ham_10m, ham_6m, ham_33cm, ham_23cm]
-```
+Shared across workers (thread-safe):
 
-- With **one** stick and no `radios:` list, behavior is unchanged (single worker).
-- With **two+** `radios:` and no `groups`, a default VHF-voice / ATC+wide split is applied.
-- Shared SQLite/CSV/WAV log; each clip is tagged `radio=<label>` in notes.
-- Live spectrum shows the most recent radio frame; `live_state.json` includes a `radios[]` status array.
+- `recordings/transmissions.db` + `.csv` + WAVs  
+- `live_state.json` (spectrum from the most recent radio; `radios[]` lists every stick’s band/mode)
+
+With **one** stick and no `device.radios:` list, you still get the async IQ reader + main worker (same as before). Multi-dongle only adds more worker/reader pairs.
+
+### How to add a second (or third) dongle
+
+1. **Plug in** the new RTL-SDR (powered USB hub recommended if the bus is weak).
+2. **List devices** and copy serials:
+
+   ```bash
+   cd ~/rtl-airwave-scanner
+   .venv/bin/python -m scanner --list-devices
+   ```
+
+   Example output:
+
+   ```text
+   Found 2 RTL-SDR device(s):
+     #0 serial=00000001
+     #1 serial=00000002
+   ```
+
+   If both serials are blank or identical, set unique ones with `rtl_eeprom` (or use `device_index` instead of `serial`).
+
+3. **Edit `config.yaml`** under `device:` — add a `radios:` list (also documented in `config.example.yaml`):
+
+   ```yaml
+   device:
+     sample_rate_hz: 2048000
+     gain: 40.2
+     ppm_error: 0
+     radios:
+       - label: voice
+         serial: "00000001"    # from --list-devices
+         groups: [ham_2m, ham_70cm, gmrs, murs, marine, ham_1p25m]
+       - label: atc
+         serial: "00000002"
+         groups: [atc, ham_10m, ham_6m, ham_33cm, ham_23cm]
+   ```
+
+   - `label` — short name in logs and clip notes (`radio=voice`).
+   - `serial` — preferred bind; use `null` to auto-pick the next free stick.
+   - `device_index` — optional alternative to serial (`0`, `1`, …).
+   - `groups` — band groups this stick hops (must match groups used in `bands:` / the viewer toggles).
+   - Per-radio `gain` / `ppm_error` override the global device values if set.
+
+4. **Restart** the scanner (`./run.sh` or Shutdown in the UI, then start again).
+
+5. **Confirm** in the log:
+
+   ```text
+   Multi-dongle: starting 2 radio worker(s)
+   [voice] RTL-SDR ready: ...
+   [atc] RTL-SDR ready: ...
+   [voice] plan: N windows · groups ham_2m,ham_70cm,...
+   [atc] plan: M windows · groups atc,...
+   ```
+
+### Defaults and tips
+
+- **No `radios:`** → single dongle, all enabled band groups (legacy path).
+- **Two+ radios with no `groups`** → automatic split: VHF voice nets on the first stick, ATC + wider/microwave groups on the second.
+- **Unassigned groups** (not listed on any radio) are still scanned: they are shared across radios that have no `groups`, or round-robined if every radio has an explicit list.
+- Prefer **explicit serials** once you have two sticks so reboot order does not swap roles.
+- One process only: the scanner lock prevents two scanner instances from fighting the same dongles.
+- Third stick: add another `radios:` entry with its own `label`, `serial`, and `groups`.
 
 ## Output
 
