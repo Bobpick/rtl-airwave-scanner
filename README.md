@@ -165,7 +165,7 @@ With **one** stick and no `device.radios:` list, you still get the async IQ read
 | `recordings/transmissions.db` | SQLite log |
 | `recordings/transmissions.csv` | CSV log |
 
-**Speech enhance (default on):** after quality scoring, clips are peak-normalized then band-passed (~**300–3400 Hz**) with a light **noise gate** before save. The viewer applies the same cleanup on play (helps older files). Toggle in `config.yaml`:
+**Speech enhance (default on):** after quality scoring, clips are peak-normalized then band-passed (~**300–3400 Hz**) with a light **noise gate** before save. **AM/ATC** uses a stronger profile (~**400–2800 Hz**, steeper filter, harder gate). The viewer applies the same cleanup on play (helps older files). AM also uses **stricter accept rules** so open-carrier hiss is less likely to be saved after AGC.
 
 ```yaml
 audio:

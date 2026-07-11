@@ -126,9 +126,30 @@ def analyze_audio(
         reasons.append("low_voice_score")
 
     if loose:
-        # Open squelch: keep anything with measurable energy
-        ok = rms >= max(min_rms * 0.15, 0.002) and peak >= 0.01
-        reason = "ok_loose" if ok else "silence"
+        # AM / open squelch: allow weaker voice than NFM, but reject open-carrier hiss.
+        # Typical airband static: low RMS, flat envelope (low env_cv), almost no activity.
+        min_loose_rms = max(min_rms * 0.22, 0.0035)
+        min_loose_peak = max(0.018, min_rms * 0.9)
+        min_loose_act = max(0.04, min_activity_ratio * 0.45)
+        has_bursts = activity_ratio >= min_loose_act
+        has_modulation = env_cv >= 0.14 or dynamic_range_db >= 5.5
+        speechy_enough = speech_band_ratio >= min_speech_band_ratio * 0.30
+        ok = (
+            rms >= min_loose_rms
+            and peak >= min_loose_peak
+            and (has_bursts or has_modulation)
+            and speechy_enough
+        )
+        if not ok:
+            if rms < min_loose_rms or peak < min_loose_peak:
+                reasons.append("am_weak")
+            if not has_bursts and not has_modulation:
+                reasons.append("am_static")
+            if not speechy_enough:
+                reasons.append("am_hissy_band")
+            reason = ",".join(reasons) if reasons else "am_reject"
+        else:
+            reason = "ok_loose"
     else:
         # Tight: score gate only — no multi-way hard-fail AND that blocks everything
         ok = score >= min_voice_score and rms >= min_rms * 0.35

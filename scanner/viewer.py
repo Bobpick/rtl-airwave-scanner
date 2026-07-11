@@ -1207,6 +1207,8 @@ def create_app(cfg: Config) -> Flask:
         hp = float(getattr(cfg, "speech_hp_hz", 300.0))
         lp = float(getattr(cfg, "speech_lp_hz", 3400.0))
         gate = bool(getattr(cfg, "speech_gate", True))
+        mod = str(row.get("modulation") or "").lower()
+        profile = "am" if mod == "am" else None
 
         if path.suffix.lower() == ".zip" or path.name.endswith(".wav.zip"):
             opened = open_audio_bytes(path)
@@ -1215,7 +1217,12 @@ def create_app(cfg: Config) -> Flask:
             data, dl_name = opened
             if enhance:
                 data = enhance_wav_bytes(
-                    data, enabled=True, highpass_hz=hp, lowpass_hz=lp, gate=gate
+                    data,
+                    enabled=True,
+                    highpass_hz=hp,
+                    lowpass_hz=lp,
+                    gate=gate,
+                    profile=profile,
                 ) or data
             return Response(
                 data,
@@ -1229,7 +1236,12 @@ def create_app(cfg: Config) -> Flask:
             try:
                 raw_bytes = path.read_bytes()
                 cleaned = enhance_wav_bytes(
-                    raw_bytes, enabled=True, highpass_hz=hp, lowpass_hz=lp, gate=gate
+                    raw_bytes,
+                    enabled=True,
+                    highpass_hz=hp,
+                    lowpass_hz=lp,
+                    gate=gate,
+                    profile=profile,
                 )
                 if cleaned:
                     return Response(

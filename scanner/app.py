@@ -512,7 +512,8 @@ class ScannerApp:
         if track.audio_chunks:
             audio_raw = np.concatenate(track.audio_chunks)
             # Quality on *pre-normalize* audio so pure noise cannot be boosted into "speech"
-            loose = self.cfg.min_voice_score <= 0.30 or band.modulation == "am"
+            is_am = band.modulation == "am"
+            loose = self.cfg.min_voice_score <= 0.30 or is_am
             raw_rms = float(np.sqrt(np.mean(np.square(audio_raw.astype(np.float64))))) if len(audio_raw) else 0.0
             metrics = analyze_audio(
                 audio_raw,
@@ -524,45 +525,56 @@ class ScannerApp:
                 min_speech_band_ratio=self.cfg.min_speech_band_ratio,
                 loose=loose,
             )
-            # Steady RF carrier (low SNR variance) with weak audio dynamics → reject when tight
+
+            def _reject(m, tag: str):
+                return type(m)(
+                    rms=m.rms,
+                    peak=m.peak,
+                    dynamic_range_db=m.dynamic_range_db,
+                    activity_ratio=m.activity_ratio,
+                    spectral_flux=m.spectral_flux,
+                    speech_band_ratio=m.speech_band_ratio,
+                    voice_score=m.voice_score,
+                    is_likely_signal=False,
+                    reason=(m.reason + "," + tag).strip(","),
+                )
+
+            # Steady RF carrier (low SNR variance) with weak audio dynamics → reject
+            # (also for AM — open-carrier ATC static often has rock-steady SNR)
             if (
-                not loose
-                and track.snr_samples
+                track.snr_samples
                 and len(track.snr_samples) >= 6
                 and metrics is not None
+                and metrics.is_likely_signal
             ):
                 snr_std = float(np.std(track.snr_samples))
-                if snr_std < 0.5 and metrics.voice_score < 0.5:
-                    metrics = type(metrics)(
-                        rms=metrics.rms,
-                        peak=metrics.peak,
-                        dynamic_range_db=metrics.dynamic_range_db,
-                        activity_ratio=metrics.activity_ratio,
-                        spectral_flux=metrics.spectral_flux,
-                        speech_band_ratio=metrics.speech_band_ratio,
-                        voice_score=metrics.voice_score,
-                        is_likely_signal=False,
-                        reason=(metrics.reason + ",steady_snr").strip(","),
-                    )
-            # Extra: very weak pre-norm RMS is almost always static after AGC
+                snr_thr = 0.65 if is_am else 0.5
+                voice_thr = 0.55 if is_am else 0.5
+                if snr_std < snr_thr and metrics.voice_score < voice_thr:
+                    metrics = _reject(metrics, "steady_snr")
+                # AM: very steady SNR + low activity = open squelch, not a call
+                if (
+                    is_am
+                    and snr_std < 1.0
+                    and metrics.activity_ratio < 0.08
+                    and metrics.dynamic_range_db < 7.0
+                ):
+                    metrics = _reject(metrics, "am_open_carrier")
+
+            # Very weak pre-norm RMS is almost always static after AGC
+            # AM uses a slightly higher floor (weak carrier hiss after peak-norm)
+            weak_floor = self.cfg.min_audio_rms * (0.28 if is_am else 0.35)
+            if is_am:
+                weak_floor = max(weak_floor, 0.0032)
             if (
-                not loose
-                and metrics is not None
+                metrics is not None
                 and metrics.is_likely_signal
-                and raw_rms < self.cfg.min_audio_rms * 0.35
+                and raw_rms < weak_floor
             ):
-                metrics = type(metrics)(
-                    rms=metrics.rms,
-                    peak=metrics.peak,
-                    dynamic_range_db=metrics.dynamic_range_db,
-                    activity_ratio=metrics.activity_ratio,
-                    spectral_flux=metrics.spectral_flux,
-                    speech_band_ratio=metrics.speech_band_ratio,
-                    voice_score=metrics.voice_score,
-                    is_likely_signal=False,
-                    reason=(metrics.reason + ",weak_raw_rms").strip(","),
-                )
+                metrics = _reject(metrics, "weak_raw_rms")
+
             # Peak-normalize once, then speech band-pass / gate for listening
+            # AM profile: narrower (≈400–2800 Hz) + harder gate
             audio_out = normalize_audio(audio_raw)
             if getattr(self.cfg, "speech_enhance", True):
                 audio_out = enhance_speech(
@@ -572,6 +584,7 @@ class ScannerApp:
                     highpass_hz=float(getattr(self.cfg, "speech_hp_hz", 300.0)),
                     lowpass_hz=float(getattr(self.cfg, "speech_lp_hz", 3400.0)),
                     gate=bool(getattr(self.cfg, "speech_gate", True)),
+                    profile="am" if is_am else None,
                 )
 
         quality = "accepted"

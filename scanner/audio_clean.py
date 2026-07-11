@@ -116,24 +116,44 @@ def enhance_speech(
     lowpass_hz: float = 3400.0,
     gate: bool = True,
     renorm_peak: float = 0.9,
+    order: int = 2,
+    gate_open_ratio: float = 0.35,
+    gate_floor: float = 0.02,
+    profile: str | None = None,
 ) -> np.ndarray:
     """
     Practical voice cleanup: band-pass → optional gate → peak re-normalize.
 
+    profile=\"am\": narrower passband + steeper filter + harder gate (ATC hiss).
     Quality scoring should run on *pre-enhance* audio so filters do not
     inflate silence into “speech.”
     """
     if not enabled or audio is None or len(audio) == 0:
         return np.asarray(audio if audio is not None else [], dtype=np.float32)
 
+    prof = (profile or "").lower()
+    if prof == "am":
+        # Narrower “radio voice” for airband; steeper roll-off; harder gate
+        highpass_hz = max(float(highpass_hz), 400.0)
+        lowpass_hz = min(float(lowpass_hz), 2800.0)
+        order = max(int(order), 4)
+        gate_open_ratio = max(float(gate_open_ratio), 0.50)
+        gate_floor = min(float(gate_floor), 0.01)
+
     y = speech_bandpass(
         audio,
         sample_rate,
         highpass_hz=highpass_hz,
         lowpass_hz=lowpass_hz,
+        order=order,
     )
     if gate:
-        y = noise_gate(y, sample_rate)
+        y = noise_gate(
+            y,
+            sample_rate,
+            open_ratio=gate_open_ratio,
+            floor=gate_floor,
+        )
     # Re-peak so listening level stays consistent after filtering
     m = float(np.max(np.abs(y))) if len(y) else 0.0
     if m > 1e-9 and renorm_peak > 0:
@@ -148,6 +168,7 @@ def enhance_wav_bytes(
     highpass_hz: float = 300.0,
     lowpass_hz: float = 3400.0,
     gate: bool = True,
+    profile: str | None = None,
 ) -> bytes | None:
     """Load WAV bytes, enhance, return new WAV bytes (PCM_16). None on failure."""
     if not enabled or not data:
@@ -165,6 +186,7 @@ def enhance_wav_bytes(
             highpass_hz=highpass_hz,
             lowpass_hz=lowpass_hz,
             gate=gate,
+            profile=profile,
         )
         out = io.BytesIO()
         sf.write(out, y, int(sr), subtype="PCM_16", format="WAV")
