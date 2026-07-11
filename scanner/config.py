@@ -97,6 +97,12 @@ class Config:
     log_rejected: bool = False
     audio_sample_rate_hz: int = 16_000
     deemphasis_tau: float | None = 75e-6
+    # Post-demod speech cleanup (band-pass + light gate)
+    speech_enhance: bool = True
+    speech_hp_hz: float = 300.0
+    speech_lp_hz: float = 3400.0
+    speech_gate: bool = True
+    speech_enhance_on_play: bool = True  # viewer re-applies for older/raw files
     bands: list[Band] = field(default_factory=list)
     known_channels: list[KnownChannel] = field(default_factory=list)
     output_dir: Path = Path("recordings")
@@ -285,6 +291,11 @@ class Config:
             log_rejected=bool(quality.get("log_rejected", False)),
             audio_sample_rate_hz=int(audio.get("sample_rate_hz", 16_000)),
             deemphasis_tau=audio.get("deemphasis_tau", 75e-6),
+            speech_enhance=bool(audio.get("speech_enhance", True)),
+            speech_hp_hz=float(audio.get("speech_hp_hz", 300)),
+            speech_lp_hz=float(audio.get("speech_lp_hz", 3400)),
+            speech_gate=bool(audio.get("speech_gate", True)),
+            speech_enhance_on_play=bool(audio.get("speech_enhance_on_play", True)),
             bands=bands,
             known_channels=known,
             output_dir=Path(output.get("directory", "recordings")),

@@ -10,6 +10,7 @@ Python RTL-SDR scanner for **SIGINT-style** capture:
 - Site-specific ATC, AWOS ignores, and local repeaters live in **`site.yaml`** (not committed)
 - **Multi-dongle + multi-threading** — one process can drive several RTL-SDRs in parallel (each stick has its own hop worker and USB IQ reader thread)
 - Audio **retention** — zip WAVs after 12 h, delete archives after 72 h
+- **Speech enhance** — band-pass ~300–3400 Hz + light noise gate on save and playback (cuts hiss outside voice)
 
 ## Requirements
 
@@ -163,6 +164,17 @@ With **one** stick and no `device.radios:` list, you still get the async IQ read
 | `recordings/archive/*.wav.zip` | Zipped audio (12–72 hours old) |
 | `recordings/transmissions.db` | SQLite log |
 | `recordings/transmissions.csv` | CSV log |
+
+**Speech enhance (default on):** after quality scoring, clips are peak-normalized then band-passed (~**300–3400 Hz**) with a light **noise gate** before save. The viewer applies the same cleanup on play (helps older files). Toggle in `config.yaml`:
+
+```yaml
+audio:
+  speech_enhance: true
+  speech_hp_hz: 300
+  speech_lp_hz: 3400
+  speech_gate: true
+  speech_enhance_on_play: true
+```
 
 **Retention (default):** after **12 hours** each WAV is zipped under `recordings/archive/`; after **72 hours** the archive is deleted. DB metadata stays. Override in `config.yaml` → `output.zip_after_hours` / `delete_after_hours`. Manual pass:
 

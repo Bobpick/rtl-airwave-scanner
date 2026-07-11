@@ -14,6 +14,7 @@ import numpy as np
 
 from scanner.audio_quality import analyze_audio
 from scanner.config import Band, Config
+from scanner.audio_clean import enhance_speech
 from scanner.demod import ChannelDemod, normalize_audio
 from scanner.lockfile import acquire as acquire_lock
 from scanner.live_state import LiveHub, write_live_state
@@ -561,8 +562,17 @@ class ScannerApp:
                     is_likely_signal=False,
                     reason=(metrics.reason + ",weak_raw_rms").strip(","),
                 )
-            # Peak-normalize once for listening / save
+            # Peak-normalize once, then speech band-pass / gate for listening
             audio_out = normalize_audio(audio_raw)
+            if getattr(self.cfg, "speech_enhance", True):
+                audio_out = enhance_speech(
+                    audio_out,
+                    self.cfg.audio_sample_rate_hz,
+                    enabled=True,
+                    highpass_hz=float(getattr(self.cfg, "speech_hp_hz", 300.0)),
+                    lowpass_hz=float(getattr(self.cfg, "speech_lp_hz", 3400.0)),
+                    gate=bool(getattr(self.cfg, "speech_gate", True)),
+                )
 
         quality = "accepted"
         reason = "ok"

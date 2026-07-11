@@ -1199,11 +1199,24 @@ def create_app(cfg: Config) -> Flask:
         path = next((p for p in candidates if p.is_file()), None)
         if path is None:
             abort(404)
+        from scanner.audio_clean import enhance_wav_bytes
+
+        enhance = bool(getattr(cfg, "speech_enhance", True)) and bool(
+            getattr(cfg, "speech_enhance_on_play", True)
+        )
+        hp = float(getattr(cfg, "speech_hp_hz", 300.0))
+        lp = float(getattr(cfg, "speech_lp_hz", 3400.0))
+        gate = bool(getattr(cfg, "speech_gate", True))
+
         if path.suffix.lower() == ".zip" or path.name.endswith(".wav.zip"):
             opened = open_audio_bytes(path)
             if opened is None:
                 abort(404)
             data, dl_name = opened
+            if enhance:
+                data = enhance_wav_bytes(
+                    data, enabled=True, highpass_hz=hp, lowpass_hz=lp, gate=gate
+                ) or data
             return Response(
                 data,
                 mimetype="audio/wav",
@@ -1212,6 +1225,23 @@ def create_app(cfg: Config) -> Flask:
                     "Cache-Control": "no-cache",
                 },
             )
+        if enhance:
+            try:
+                raw_bytes = path.read_bytes()
+                cleaned = enhance_wav_bytes(
+                    raw_bytes, enabled=True, highpass_hz=hp, lowpass_hz=lp, gate=gate
+                )
+                if cleaned:
+                    return Response(
+                        cleaned,
+                        mimetype="audio/wav",
+                        headers={
+                            "Content-Disposition": f'inline; filename="{path.name}"',
+                            "Cache-Control": "no-cache",
+                        },
+                    )
+            except Exception:
+                pass
         return send_file(
             path,
             mimetype="audio/wav",

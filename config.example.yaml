@@ -78,6 +78,12 @@ quality:
 audio:
   sample_rate_hz: 16000
   deemphasis_tau: 75.0e-6
+  # Post-save / playback voice cleanup (band-pass + light noise gate)
+  speech_enhance: true
+  speech_hp_hz: 300
+  speech_lp_hz: 3400
+  speech_gate: true
+  speech_enhance_on_play: true   # also clean older WAVs when the viewer plays them
 
 # Hop order = priority (most useful SIGINT first when all groups enabled)
 bands:
