@@ -512,19 +512,19 @@ PAGE = r"""
           </p>
           <div class="sq-row atc">
             <label><span class="range">RF SNR (min dB above noise)</span><b id="v-snr">12.0</b></label>
-            <input type="range" id="snr_threshold_db" min="4" max="35" step="0.5" value="12"/>
+            <input type="range" id="snr_threshold_db" min="4" max="70" step="0.5" value="12"/>
           </div>
           <div class="sq-row ham">
             <label><span class="range">Voice score (≤0.30 = looser)</span><b id="v-voice">0.25</b></label>
-            <input type="range" id="min_voice_score" min="0.10" max="0.95" step="0.01" value="0.25"/>
+            <input type="range" id="min_voice_score" min="0.10" max="1.00" step="0.01" value="0.25"/>
           </div>
           <div class="sq-row gmrs">
             <label><span class="range">Min activity %</span><b id="v-act">4</b>%</label>
-            <input type="range" id="min_activity_ratio" min="0.01" max="0.50" step="0.01" value="0.04"/>
+            <input type="range" id="min_activity_ratio" min="0.01" max="1.00" step="0.01" value="0.04"/>
           </div>
           <div class="sq-row marine">
             <label><span class="range">Min dynamic range dB</span><b id="v-dyn">4.0</b></label>
-            <input type="range" id="min_dynamic_range_db" min="1" max="20" step="0.5" value="4"/>
+            <input type="range" id="min_dynamic_range_db" min="1" max="40" step="0.5" value="4"/>
           </div>
           <div class="saved" id="sq-saved">saved</div>
 

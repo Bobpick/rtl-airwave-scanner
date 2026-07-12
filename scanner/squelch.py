@@ -19,12 +19,13 @@ DEFAULTS: dict[str, float] = {
 }
 
 LIMITS: dict[str, tuple[float, float]] = {
-    "snr_threshold_db": (4.0, 35.0),
-    "min_voice_score": (0.10, 0.95),
-    "min_activity_ratio": (0.01, 0.50),
-    "min_dynamic_range_db": (1.0, 20.0),
-    "min_speech_band_ratio": (0.05, 0.80),
-    "min_audio_rms": (0.002, 0.10),
+    # UI ranges are wide so operators can find a sweet spot (activity up to 100%)
+    "snr_threshold_db": (4.0, 70.0),
+    "min_voice_score": (0.10, 1.0),
+    "min_activity_ratio": (0.01, 1.0),
+    "min_dynamic_range_db": (1.0, 40.0),
+    "min_speech_band_ratio": (0.05, 0.95),
+    "min_audio_rms": (0.002, 0.20),
 }
 
 # Live enables — ham is split by meters so operators can deselect
