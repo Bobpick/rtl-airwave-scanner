@@ -501,7 +501,18 @@ class ScannerApp:
             return
         end = utcnow()
         duration = (end - track.start_time).total_seconds()
-        if duration < self.cfg.min_active_seconds and not force:
+        # Hard floor: sub-4s clips are almost never useful intel (noise/kerchunk)
+        min_save = float(getattr(self.cfg, "min_recording_seconds", 4.0) or 4.0)
+        if duration < min_save:
+            log.info(
+                "REJECT %.4f MHz  duration=%.2fs < %.1fs (too_short)",
+                track.frequency_hz / 1e6,
+                duration,
+                min_save,
+            )
+            return
+        # Also honor legacy arm-time floor when longer than min_save is not the issue
+        if duration < self.cfg.min_active_seconds:
             log.debug("Drop short blip @ %.4f MHz (%.2fs)", track.frequency_hz / 1e6, duration)
             return
 

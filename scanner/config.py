@@ -80,6 +80,8 @@ class Config:
     channel_bw_hz: float = 12_500
     edge_guard_fraction: float = 0.08
     min_active_seconds: float = 0.6
+    # Do not save clips shorter than this (noise/blips); separate from RF arm time
+    min_recording_seconds: float = 4.0
     hang_time_seconds: float = 2.0
     max_recording_seconds: float = 90.0
     spur_learn_seconds: float = 45.0
@@ -274,6 +276,9 @@ class Config:
             channel_bw_hz=float(detection.get("channel_bw_hz", 12_500)),
             edge_guard_fraction=float(detection.get("edge_guard_fraction", 0.08)),
             min_active_seconds=float(detection.get("min_active_seconds", 0.6)),
+            min_recording_seconds=float(
+                detection.get("min_recording_seconds", detection.get("min_save_seconds", 4.0))
+            ),
             hang_time_seconds=float(detection.get("hang_time_seconds", 2.0)),
             max_recording_seconds=float(detection.get("max_recording_seconds", 90)),
             spur_learn_seconds=float(detection.get("spur_learn_seconds", 45)),

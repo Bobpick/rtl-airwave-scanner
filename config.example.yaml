@@ -40,6 +40,8 @@ detection:
   channel_step_hz: 12500
   edge_guard_fraction: 0.10
   min_active_seconds: 0.35
+  # Do not save WAVs shorter than this (kerchunks / open-squelch blips)
+  min_recording_seconds: 4.0
   hang_time_seconds: 1.2
   max_recording_seconds: 90
   spur_learn_seconds: 6
