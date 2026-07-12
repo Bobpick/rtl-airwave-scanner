@@ -387,6 +387,25 @@ PAGE = r"""
     .tag.public { color: #ff9f7c; background: rgba(227,107,95,.13); }
     .tag.other { color: #a9b7c5; background: rgba(148,163,184,.12); }
     .freq { color: #9bcfff; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .metric {
+      font-variant-numeric: tabular-nums;
+      font-size: .86rem;
+      color: #c5d4e4;
+      white-space: nowrap;
+    }
+    .metric.low {
+      color: #f0a0a8;
+      font-weight: 600;
+    }
+    .metric.ok {
+      color: #7ee0a0;
+    }
+    .metric.mid { color: #e6c86a; }
+    th.metric-h, td.metric {
+      text-align: right;
+      padding-left: .35rem;
+      padding-right: .45rem;
+    }
     .file a { color: #3b90d8; text-decoration: none; }
     .file a:hover { color: #75c1ff; text-decoration: underline; }
     .actions { display: flex; align-items: center; justify-content: flex-end; gap: .36rem; }
@@ -555,14 +574,18 @@ PAGE = r"""
                   <th>TIME (UTC)</th>
                   <th>FREQUENCY</th>
                   <th>BAND</th>
-                  <th>SNR (dB)</th>
-                  <th>DURATION</th>
+                  <th class="metric-h" title="Peak RF SNR above noise">SNR</th>
+                  <th class="metric-h" title="Voice likelihood 0–1 (must clear Voice score slider)">VOICE</th>
+                  <th class="metric-h" title="Fraction of frames above noise (must clear Min activity %)">ACT%</th>
+                  <th class="metric-h" title="Envelope dynamic range dB (must clear Min dynamic range)">DR</th>
+                  <th class="metric-h" title="Pre-normalize audio RMS">RMS</th>
+                  <th>DUR</th>
                   <th>FILE</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody id="rows">
-                <tr><td colspan="7" class="empty">Loading…</td></tr>
+                <tr><td colspan="11" class="empty">Loading…</td></tr>
               </tbody>
             </table>
           </div>
@@ -672,6 +695,11 @@ PAGE = r"""
     }
     function scheduleSave() {
       updateLabels();
+      // Re-color table metrics vs current sliders while tuning the sweet spot
+      if (typeof loadRows === 'function') {
+        clearTimeout(window._rowsColorTimer);
+        window._rowsColorTimer = setTimeout(() => loadRows(), 120);
+      }
       clearTimeout(saveTimer);
       saveTimer = setTimeout(() => saveSquelch(false), 180);
     }
@@ -888,9 +916,16 @@ PAGE = r"""
         const rows = await response.json();
         const tbody = $('rows');
         if (!rows.length) {
-          tbody.innerHTML = '<tr><td colspan="7" class="empty">No recordings yet — run <code>./run.sh</code> and enable band groups.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="11" class="empty">No recordings yet — run <code>./run.sh</code> and enable band groups.</td></tr>';
           return;
         }
+        // Current sliders — red metrics are below the threshold that would reject *new* clips
+        const thrVoice = Number($('min_voice_score')?.value ?? 0.4);
+        const thrAct = Number($('min_activity_ratio')?.value ?? 0.08); // 0–1 if stored as ratio slider
+        const thrActPct = thrAct > 1 ? thrAct : thrAct * 100;
+        const thrDr = Number($('min_dynamic_range_db')?.value ?? 7);
+        const thrSnr = Number($('snr_threshold_db')?.value ?? 12);
+
         tbody.innerHTML = rows.map(r => {
           const g = groupOf(r.band_name, r.notes);
           const fname = (r.audio_file || '').split('/').pop() || '—';
@@ -898,11 +933,38 @@ PAGE = r"""
             ? `<button class="icon-btn play" data-src="/audio/${r.id}" title="Play recording">▶</button>
                <a class="icon-btn download" title="Download" href="/audio/${r.id}" download="${fname}">⇩</a>`
             : '—';
-          return `<tr>
+          const voice = Number(r.voice_score ?? 0);
+          const act = Number(r.activity_ratio ?? 0); // 0–1
+          const actPct = act * 100;
+          const dr = Number(r.dynamic_range_db ?? 0);
+          const rms = Number(r.audio_rms ?? 0);
+          const snr = Number(r.peak_snr_db ?? 0);
+          const reason = r.quality_reason || r.quality || '';
+          const cls = (val, thr, higherIsBetter=true) => {
+            if (val == null || Number.isNaN(val)) return 'metric';
+            const ok = higherIsBetter ? val >= thr : val <= thr;
+            if (ok) return 'metric ok';
+            // close to threshold
+            const near = higherIsBetter ? val >= thr * 0.85 : val <= thr * 1.15;
+            return near ? 'metric mid' : 'metric low';
+          };
+          const tip = [
+            `voice=${voice.toFixed(2)} (slider ≥${thrVoice.toFixed(2)})`,
+            `activity=${actPct.toFixed(0)}% (slider ≥${thrActPct.toFixed(0)}%)`,
+            `DR=${dr.toFixed(1)} dB (slider ≥${thrDr.toFixed(1)})`,
+            `RMS=${rms.toFixed(4)} (pre-normalize)`,
+            `SNR=${snr.toFixed(1)} dB (slider ≥${thrSnr.toFixed(1)})`,
+            reason ? `reason=${reason}` : '',
+          ].filter(Boolean).join(' · ');
+          return `<tr title="${tip.replace(/"/g, '&quot;')}">
             <td>${fmtTime(r.start_utc)}</td>
             <td class="freq">${Number(r.frequency_mhz || 0).toFixed(4)} MHz</td>
             <td><span class="tag ${g}">${groupLabel(g)}</span></td>
-            <td>${Number(r.peak_snr_db ?? 0).toFixed(1)}</td>
+            <td class="${cls(snr, thrSnr)}">${snr.toFixed(1)}</td>
+            <td class="${cls(voice, thrVoice)}">${voice.toFixed(2)}</td>
+            <td class="${cls(actPct, thrActPct)}">${actPct.toFixed(0)}%</td>
+            <td class="${cls(dr, thrDr)}">${dr.toFixed(1)}</td>
+            <td class="metric" title="Pre-normalize RMS">${rms < 0.001 ? rms.toExponential(1) : rms.toFixed(3)}</td>
             <td>${fmtDur(r.duration_seconds)}</td>
             <td class="file">${r.audio_file ? `<a href="/audio/${r.id}" download="${fname}">${fname}</a>` : '—'}</td>
             <td class="actions">${play}
