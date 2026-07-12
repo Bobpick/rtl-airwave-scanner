@@ -515,7 +515,7 @@ PAGE = r"""
             <input type="range" id="snr_threshold_db" min="4" max="70" step="0.5" value="12"/>
           </div>
           <div class="sq-row ham">
-            <label><span class="range">Voice score (≤0.30 = looser)</span><b id="v-voice">0.25</b></label>
+            <label><span class="range">Voice score (higher = stricter)</span><b id="v-voice">0.25</b></label>
             <input type="range" id="min_voice_score" min="0.10" max="1.00" step="0.01" value="0.25"/>
           </div>
           <div class="sq-row gmrs">

@@ -179,10 +179,11 @@ class ScannerApp:
         ):
             groups.append(f"{g}{'✓' if flag else '✗'}")
         log.info(
-            "Squelch: RF≥%.1f dB voice≥%.2f act≥%.0f%% · bands %s",
+            "Squelch: RF≥%.1f dB voice≥%.2f act≥%.0f%% DR≥%.1f · bands %s",
             self.cfg.snr_threshold_db,
             self.cfg.min_voice_score,
             self.cfg.min_activity_ratio * 100,
+            self.cfg.min_dynamic_range_db,
             " ".join(groups),
         )
 
@@ -520,11 +521,13 @@ class ScannerApp:
         audio_raw = None
         audio_out = None
         metrics = None
+        # IMPORTANT: loose mode is AM-only. A low voice-score slider must NOT
+        # disable activity/DR gates for NFM (that was accepting keyed-mic static).
+        is_am = band.modulation == "am"
         if track.audio_chunks:
             audio_raw = np.concatenate(track.audio_chunks)
             # Quality on *pre-normalize* audio so pure noise cannot be boosted into "speech"
-            is_am = band.modulation == "am"
-            loose = self.cfg.min_voice_score <= 0.30 or is_am
+            loose = is_am
             raw_rms = float(np.sqrt(np.mean(np.square(audio_raw.astype(np.float64))))) if len(audio_raw) else 0.0
             metrics = analyze_audio(
                 audio_raw,
@@ -603,22 +606,41 @@ class ScannerApp:
         audio_path = None
         min_samples = int(self.cfg.audio_sample_rate_hz * 0.25)
 
+        # Always enforce quality gates from live sliders (require_audio_quality
+        # can no longer silently accept out-of-range clips).
         if metrics is None or audio_out is None:
             quality = "rejected"
             reason = "no_audio"
         elif len(audio_out) < min_samples:
             quality = "rejected"
             reason = "audio_too_short"
-        elif self.cfg.require_audio_quality and not metrics.is_likely_signal:
+        elif not metrics.is_likely_signal:
             quality = "rejected"
             reason = metrics.reason
         else:
-            audio_path = self.logger.save_audio(
-                audio_out,
-                self.cfg.audio_sample_rate_hz,
-                track.frequency_hz,
-                track.start_time,
-            )
+            # Belt-and-suspenders: re-check slider floors on stored metrics
+            thr_voice = float(self.cfg.min_voice_score)
+            thr_act = float(self.cfg.min_activity_ratio)
+            thr_dr = float(self.cfg.min_dynamic_range_db)
+            # AM already used relaxed floors inside analyze_audio; NFM is strict
+            if not is_am:
+                fails = []
+                if metrics.voice_score < thr_voice:
+                    fails.append("low_voice_score")
+                if metrics.activity_ratio < thr_act:
+                    fails.append("low_activity")
+                if metrics.dynamic_range_db < thr_dr:
+                    fails.append("flat_level")
+                if fails:
+                    quality = "rejected"
+                    reason = ",".join(fails)
+            if quality == "accepted":
+                audio_path = self.logger.save_audio(
+                    audio_out,
+                    self.cfg.audio_sample_rate_hz,
+                    track.frequency_hz,
+                    track.start_time,
+                )
 
         if quality == "rejected":
             log.info(

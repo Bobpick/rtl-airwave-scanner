@@ -95,22 +95,30 @@ def analyze_audio(
     if len(specs) >= 2:
         spectral_flux = float(np.mean(np.abs(np.diff(np.stack(specs), axis=0))))
 
-    # Weighted score 0–1 (informative even in loose mode)
+    # Weighted score 0–1 (uses full slider thresholds so UI matches accept logic)
     score = 0.0
-    if rms >= min_rms * 0.5:
+    if rms >= min_rms:
         score += 0.2
-    elif rms >= min_rms * 0.2:
+    elif rms >= min_rms * 0.5:
         score += 0.1
-    if dynamic_range_db >= min_dynamic_range_db * 0.5:
-        score += 0.15
-    if activity_ratio >= min_activity_ratio * 0.5:
+    if dynamic_range_db >= min_dynamic_range_db:
         score += 0.2
-    if env_cv >= 0.08:
-        score += 0.15
-    if speech_band_ratio >= min_speech_band_ratio * 0.5:
-        score += 0.2
-    if spectral_flux > 0.005:
+    elif dynamic_range_db >= min_dynamic_range_db * 0.75:
         score += 0.1
+    if activity_ratio >= min_activity_ratio:
+        score += 0.25
+    elif activity_ratio >= min_activity_ratio * 0.75:
+        score += 0.1
+    if env_cv >= 0.12:
+        score += 0.15
+    elif env_cv >= 0.08:
+        score += 0.08
+    if speech_band_ratio >= min_speech_band_ratio:
+        score += 0.15
+    elif speech_band_ratio >= min_speech_band_ratio * 0.7:
+        score += 0.08
+    if spectral_flux > 0.008:
+        score += 0.05
     score = float(min(score, 1.0))
 
     reasons = []
@@ -126,37 +134,51 @@ def analyze_audio(
         reasons.append("low_voice_score")
 
     if loose:
-        # AM / open squelch: allow weaker voice than NFM, but reject open-carrier hiss.
-        # Typical airband static: low RMS, flat envelope (low env_cv), almost no activity.
-        min_loose_rms = max(min_rms * 0.22, 0.0035)
-        min_loose_peak = max(0.018, min_rms * 0.9)
-        min_loose_act = max(0.04, min_activity_ratio * 0.45)
-        has_bursts = activity_ratio >= min_loose_act
-        has_modulation = env_cv >= 0.14 or dynamic_range_db >= 5.5
-        speechy_enough = speech_band_ratio >= min_speech_band_ratio * 0.30
+        # AM only (caller must set loose=True solely for AM).
+        # Still honor slider floors for activity / DR / voice — relaxed slightly.
+        min_loose_rms = max(min_rms * 0.35, 0.0035)
+        min_loose_peak = max(0.015, min_rms * 0.7)
+        act_need = max(0.03, min_activity_ratio * 0.65)
+        dr_need = max(3.0, min_dynamic_range_db * 0.65)
+        voice_need = max(0.15, min_voice_score * 0.75)
+        has_bursts = activity_ratio >= act_need
+        has_dr = dynamic_range_db >= dr_need
+        speechy_enough = speech_band_ratio >= min_speech_band_ratio * 0.40
         ok = (
             rms >= min_loose_rms
             and peak >= min_loose_peak
-            and (has_bursts or has_modulation)
+            and has_bursts
+            and has_dr
+            and score >= voice_need
             and speechy_enough
         )
         if not ok:
             if rms < min_loose_rms or peak < min_loose_peak:
                 reasons.append("am_weak")
-            if not has_bursts and not has_modulation:
-                reasons.append("am_static")
+            if not has_bursts:
+                reasons.append("am_low_activity")
+            if not has_dr:
+                reasons.append("am_flat_level")
+            if score < voice_need:
+                reasons.append("am_low_voice")
             if not speechy_enough:
                 reasons.append("am_hissy_band")
             reason = ",".join(reasons) if reasons else "am_reject"
         else:
             reason = "ok_loose"
     else:
-        # Tight: score gate only — no multi-way hard-fail AND that blocks everything
-        ok = score >= min_voice_score and rms >= min_rms * 0.35
-        # Extra: reject pure DC-flat if very tight
-        if min_voice_score >= 0.55 and env_cv < 0.05 and dynamic_range_db < 3.0:
+        # Tight (NFM / default): EVERY slider is a hard gate — matches UI expectations
+        ok = (
+            score >= min_voice_score
+            and rms >= min_rms * 0.5
+            and activity_ratio >= min_activity_ratio
+            and dynamic_range_db >= min_dynamic_range_db
+        )
+        # Steady keyed-mic / open carrier: almost no envelope motion
+        if env_cv < 0.06 and activity_ratio < max(0.08, min_activity_ratio):
             ok = False
-            reasons.append("steady_envelope")
+            if "steady_envelope" not in reasons:
+                reasons.append("steady_envelope")
         reason = "ok" if ok else (",".join(reasons) or "rejected")
 
     return AudioMetrics(
